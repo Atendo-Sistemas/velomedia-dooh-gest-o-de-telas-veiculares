@@ -1,6 +1,21 @@
 import crypto from 'node:crypto';
 
-const MASTER_HMAC_SECRET = process.env.DEVICE_HMAC_MASTER_SECRET || 'velo-dooh-device-pop-hmac-master-secret-2026';
+/**
+ * Retrieve an environment secret safely with strict production enforcement.
+ */
+export function getRequiredSecret(name: string, devFallback?: string): string {
+  const val = process.env[name];
+  if (val && val.trim().length > 0) {
+    return val.trim();
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(`[FATAL SECURITY CONFIG] Environment variable '${name}' is required in production.`);
+  }
+  if (devFallback) {
+    return devFallback;
+  }
+  throw new Error(`[SECURITY CONFIG] Missing required variable '${name}'.`);
+}
 
 /**
  * Hash a password using PBKDF2 with 100,000 iterations and salt
@@ -47,11 +62,80 @@ export function generatePairingCode(): string {
  * Generate a unique device secret key
  */
 export function generateDeviceSecret(): string {
-  return crypto.randomBytes(24).toString('hex');
+  return crypto.randomBytes(32).toString('hex');
 }
 
 /**
- * Canonical payload string for HMAC computation
+ * SHA-256 hash of a request body for payload integrity checking
+ */
+export function hashRequestBody(body: string | object | undefined): string {
+  const str = typeof body === 'object' ? JSON.stringify(body) : (body || '');
+  return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+/**
+ * Canonical string representation for HTTP device requests
+ */
+export function buildDeviceRequestCanonicalString(params: {
+  method: string;
+  path: string;
+  timestamp: string;
+  nonce: string;
+  bodyHash: string;
+}): string {
+  return [
+    params.method.toUpperCase(),
+    params.path.toLowerCase(),
+    params.timestamp,
+    params.nonce,
+    params.bodyHash,
+  ].join('\n');
+}
+
+/**
+ * Sign an HTTP request using the device's secret key
+ */
+export function signDeviceRequest(
+  params: {
+    method: string;
+    path: string;
+    timestamp: string;
+    nonce: string;
+    bodyHash: string;
+  },
+  deviceSecret: string
+): string {
+  const canonical = buildDeviceRequestCanonicalString(params);
+  return crypto.createHmac('sha256', deviceSecret).update(canonical).digest('hex');
+}
+
+/**
+ * Verify a device HTTP request signature
+ */
+export function verifyDeviceRequestSignature(
+  params: {
+    method: string;
+    path: string;
+    timestamp: string;
+    nonce: string;
+    bodyHash: string;
+    signature: string;
+  },
+  deviceSecret: string
+): boolean {
+  try {
+    const expected = signDeviceRequest(params, deviceSecret);
+    const expectedBuf = Buffer.from(expected, 'hex');
+    const providedBuf = Buffer.from(params.signature, 'hex');
+    if (expectedBuf.length !== providedBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, providedBuf);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Canonical payload string for Proof of Play HMAC computation
  */
 export function buildProofOfPlayCanonicalString(params: {
   eventId: string;
@@ -89,11 +173,13 @@ export function signProofOfPlay(
     durationMs: number;
     nonce: string;
   },
-  deviceSecret?: string
+  deviceSecret: string
 ): string {
-  const secret = deviceSecret || MASTER_HMAC_SECRET;
+  if (!deviceSecret) {
+    throw new Error('deviceSecret is required to sign Proof of Play.');
+  }
   const canonical = buildProofOfPlayCanonicalString(params);
-  return crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+  return crypto.createHmac('sha256', deviceSecret).update(canonical).digest('hex');
 }
 
 /**
@@ -111,9 +197,10 @@ export function verifyProofOfPlaySignature(
     nonce: string;
     signature: string;
   },
-  deviceSecret?: string
+  deviceSecret: string
 ): boolean {
   try {
+    if (!deviceSecret || !params.signature) return false;
     const expected = signProofOfPlay(params, deviceSecret);
     const expectedBuffer = Buffer.from(expected, 'hex');
     const providedBuffer = Buffer.from(params.signature, 'hex');
@@ -132,6 +219,7 @@ export function verifyProofOfPlaySignature(
  */
 export function verifyWebhookSignature(rawBody: string, signature: string, secret: string): boolean {
   try {
+    if (!secret || !signature) return false;
     const computed = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
     const computedBuf = Buffer.from(computed, 'hex');
     const providedBuf = Buffer.from(signature, 'hex');

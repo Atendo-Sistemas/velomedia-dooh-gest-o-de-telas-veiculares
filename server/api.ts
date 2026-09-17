@@ -1,25 +1,46 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { z } from 'zod';
 import { storage } from './storage';
 import { 
   verifyPassword, 
   generateSessionToken, 
   generatePairingCode, 
   generateDeviceSecret, 
-  signProofOfPlay, 
   verifyProofOfPlaySignature 
 } from './crypto';
-import { requireAuth, requireRole, resolveTenant } from './auth';
+import { 
+  requireAuth, 
+  requireRole, 
+  resolveTenant, 
+  requireDeviceAuth, 
+  requireUserOrDeviceAuth,
+  SESSION_COOKIE_NAME,
+  COOKIE_OPTIONS,
+  checkLoginRateLimit,
+  recordFailedLogin,
+  resetLoginRateLimit
+} from './auth';
+import { 
+  LoginSchema, 
+  DriverSchema, 
+  DeviceSchema, 
+  DevicePairingRequestSchema,
+  CampaignSchema, 
+  GeoFenceSchema, 
+  ProofOfPlaySubmissionSchema, 
+  TelemetryHeartbeatSchema,
+  RemoteCommandSchema,
+  validateBody
+} from './schemas';
 import { pixGateway } from './billing';
-import type { Device, Driver, Campaign, GeoFence, ProofOfPlayLog } from '../src/types';
+import type { Device, Driver, Campaign, GeoFence, ProofOfPlayLog, AdvertiserAccount, SaaSInvoice } from '../src/types';
 
 export const apiRouter = Router();
 
 // ============================================================================
 // 1. HEALTH & METRICS
 // ============================================================================
-apiRouter.get('/health', (req: Request, res: Response) => {
+apiRouter.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -32,37 +53,42 @@ apiRouter.get('/health', (req: Request, res: Response) => {
 // ============================================================================
 // 2. AUTHENTICATION & SESSION
 // ============================================================================
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6),
-});
+apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Response): void => {
+  const ip = req.ip || 'unknown-ip';
+  const { email, password } = req.body;
 
-apiRouter.post('/auth/login', (req: Request, res: Response): void => {
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'BAD_REQUEST', details: parsed.error.format() });
+  // 1. Rate limiting against brute force
+  const rateLimit = checkLoginRateLimit(ip);
+  if (!rateLimit.allowed) {
+    res.status(429).json({
+      error: 'too_many_attempts',
+      message: `Muitas tentativas incorretas. Tente novamente em ${rateLimit.retryAfterSec} segundos.`,
+    });
     return;
   }
 
-  const { email, password } = parsed.data;
   const user = storage.getUserByEmail(email);
 
   if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+    recordFailedLogin(ip);
     storage.logAudit({
       organizationId: user?.organizationId || 'system',
       userEmail: email,
       action: 'AUTH_LOGIN_FAILED',
       resource: 'auth',
-      ipAddress: req.ip,
+      ipAddress: ip,
       details: { reason: 'Invalid credentials' },
     });
-    res.status(401).json({ error: 'INVALID_CREDENTIALS', message: 'E-mail ou senha incorretos.' });
+    res.status(401).json({ error: 'invalid_credentials', message: 'E-mail ou senha incorretos.' });
     return;
   }
 
-  // Generate 24h session token
+  // Reset rate limit on success
+  resetLoginRateLimit(ip);
+
+  // Generate 7-day session token
   const token = generateSessionToken();
-  const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+  const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
 
   storage.createSession({
     token,
@@ -76,12 +102,7 @@ apiRouter.post('/auth/login', (req: Request, res: Response): void => {
   });
 
   // Set secure HttpOnly cookie
-  res.cookie('velo_session', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000,
-  });
+  res.cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTIONS);
 
   storage.logAudit({
     organizationId: user.organizationId,
@@ -89,16 +110,16 @@ apiRouter.post('/auth/login', (req: Request, res: Response): void => {
     userEmail: user.email,
     action: 'AUTH_LOGIN_SUCCESS',
     resource: 'auth',
-    ipAddress: req.ip,
+    ipAddress: ip,
   });
 
-  const { passwordHash, ...safeUser } = user;
+  const { passwordHash: _, ...safeUser } = user;
   const org = storage.getOrganizationById(user.organizationId);
 
+  // Section 2.2: Do NOT return the token in JSON body; keep it exclusively in HttpOnly cookie
   res.json({
     user: safeUser,
     organization: org,
-    token,
   });
 });
 
@@ -106,18 +127,13 @@ apiRouter.post('/auth/logout', (req: Request, res: Response) => {
   if (req.sessionToken) {
     storage.deleteSession(req.sessionToken);
   }
-  res.clearCookie('velo_session');
+  res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
   res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
 });
 
-apiRouter.get('/auth/me', (req: Request, res: Response): void => {
-  if (!req.user) {
-    res.status(401).json({ authenticated: false });
-    return;
-  }
-
-  const user = storage.getUserById(req.user.id);
-  const org = storage.getOrganizationById(req.user.organizationId);
+apiRouter.get('/auth/me', requireAuth, (req: Request, res: Response): void => {
+  const user = storage.getUserById(req.user!.id);
+  const org = storage.getOrganizationById(req.user!.organizationId);
 
   res.json({
     authenticated: true,
@@ -127,555 +143,667 @@ apiRouter.get('/auth/me', (req: Request, res: Response): void => {
 });
 
 // ============================================================================
-// 3. ORGANIZATIONS (Multi-Tenant Master)
+// 3. ORGANIZATIONS (Super Admin / Multi-Tenant Master)
 // ============================================================================
-apiRouter.get('/organizations', (req: Request, res: Response): void => {
-  // If not logged in, return existing public org for bootstrap view
-  if (!req.user) {
-    res.json(storage.getOrganizations());
-    return;
+apiRouter.get('/organizations', requireAuth, (req: Request, res: Response) => {
+  if (req.user!.role === 'platform_admin' || req.user!.role === 'super_admin') {
+    return res.json(storage.getOrganizations());
   }
-
-  if (req.user.role === 'platform_admin') {
-    res.json(storage.getOrganizations());
-    return;
-  }
-
-  // Tenant operators can only see their own organization
-  const org = storage.getOrganizationById(req.user.organizationId);
-  res.json(org ? [org] : []);
+  const userOrg = storage.getOrganizationById(req.user!.organizationId);
+  res.json(userOrg ? [userOrg] : []);
 });
 
-apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin']), (req: Request, res: Response) => {
-  const newOrg = req.body;
-  newOrg.id = newOrg.id || `org_${Date.now()}`;
-  newOrg.createdAt = new Date().toISOString();
-  storage.saveOrganization(newOrg);
-
+apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
+  storage.saveOrganization(req.body);
   storage.logAudit({
-    organizationId: newOrg.id,
-    userId: req.user?.id,
-    userEmail: req.user?.email,
-    action: 'ORGANIZATION_CREATED',
+    organizationId: req.body.id,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'CREATE_ORGANIZATION',
     resource: 'organizations',
-    resourceId: newOrg.id,
-    details: { name: newOrg.name },
+    resourceId: req.body.id,
+    ipAddress: req.ip,
   });
-
-  res.status(201).json(newOrg);
+  res.status(201).json(req.body);
 });
 
-apiRouter.put('/organizations/:id', requireAuth, (req: Request, res: Response): void => {
-  const orgId = req.params.id;
-  if (req.user?.role !== 'platform_admin' && req.user?.organizationId !== orgId) {
-    res.status(403).json({ error: 'FORBIDDEN' });
-    return;
+apiRouter.put('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
+  storage.saveOrganization(req.body);
+  res.json(req.body);
+});
+
+apiRouter.delete('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
+  const deleted = storage.deleteOrganization(req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'not_found', message: 'Organização não encontrada.' });
+  }
+  res.json({ success: true });
+});
+
+// ============================================================================
+// 4. DRIVERS (Strict Multi-Tenant Isolation)
+// ============================================================================
+apiRouter.get('/drivers', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  res.json(storage.getDrivers(tenantId));
+});
+
+apiRouter.post('/drivers', requireAuth, validateBody(DriverSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const saved = storage.saveDriver(req.body as Driver, tenantId);
+  if (!saved) {
+    return res.status(409).json({ error: 'conflict', message: 'Motorista já existe em outro tenant.' });
+  }
+  res.status(201).json(saved);
+});
+
+apiRouter.put('/drivers/:id', requireAuth, validateBody(DriverSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const existing = storage.getDriverById(req.params.id, tenantId);
+  if (!existing) {
+    return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado neste tenant.' });
   }
 
-  const updatedOrg = { ...req.body, id: orgId };
-  storage.saveOrganization(updatedOrg);
-  res.json(updatedOrg);
-});
-
-apiRouter.delete('/organizations/:id', requireAuth, requireRole(['platform_admin']), (req: Request, res: Response) => {
-  const success = storage.deleteOrganization(req.params.id);
-  res.json({ success });
-});
-
-// ============================================================================
-// 4. DRIVERS
-// ============================================================================
-apiRouter.get('/drivers', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getDrivers(orgId));
-});
-
-apiRouter.post('/drivers', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const newDriver: Driver = {
-    ...req.body,
-    id: req.body.id || `drv_${Date.now()}`,
-    organizationId: orgId,
-  };
-  storage.saveDriver(newDriver);
-  res.status(201).json(newDriver);
-});
-
-apiRouter.put('/drivers/:id', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const updatedDriver: Driver = {
-    ...req.body,
-    id: req.params.id,
-    organizationId: orgId,
-  };
-  storage.saveDriver(updatedDriver);
-  res.json(updatedDriver);
-});
-
-apiRouter.delete('/drivers/:id', (req: Request, res: Response) => {
-  const success = storage.deleteDriver(req.params.id);
-  res.json({ success });
-});
-
-apiRouter.post('/drivers/:id/payout', (req: Request, res: Response): void => {
-  const driver = storage.getDriverById(req.params.id);
-  if (!driver) {
-    res.status(404).json({ error: 'NOT_FOUND', message: 'Motorista não encontrado' });
-    return;
-  }
-
-  const paidAmount = driver.pendingBalance;
-  driver.pendingBalance = 0;
-  storage.saveDriver(driver);
-
-  storage.logAudit({
-    organizationId: driver.organizationId || 'system',
-    userId: req.user?.id,
-    action: 'DRIVER_PIX_PAYOUT_PROCESSED',
-    resource: 'drivers',
-    resourceId: driver.id,
-    details: {
-      driverName: driver.name,
-      amount: paidAmount,
-      pixKey: driver.pixKey,
-    },
-  });
-
-  res.json({ success: true, paidAmount, pendingBalance: 0 });
-});
-
-// ============================================================================
-// 5. DEVICES & HARDWARE KIOSK
-// ============================================================================
-apiRouter.get('/devices', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getDevices(orgId));
-});
-
-apiRouter.post('/devices', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const newDev: Device = {
-    ...req.body,
-    id: req.body.id || `dev_${Date.now()}`,
-    organizationId: orgId,
-  };
-  storage.saveDevice(newDev);
-  res.status(201).json(newDev);
-});
-
-apiRouter.put('/devices/:id', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const updated: Device = {
-    ...req.body,
-    id: req.params.id,
-    organizationId: orgId,
-  };
-  storage.saveDevice(updated);
+  const updated = storage.saveDriver(req.body as Driver, tenantId);
   res.json(updated);
 });
 
-apiRouter.delete('/devices/:id', (req: Request, res: Response) => {
-  const success = storage.deleteDevice(req.params.id);
-  res.json({ success });
+apiRouter.delete('/drivers/:id', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const deleted = storage.deleteDriver(req.params.id, tenantId);
+  if (!deleted) {
+    return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado neste tenant.' });
+  }
+  res.json({ success: true });
+});
+
+apiRouter.post('/drivers/:id/payout', requireAuth, requireRole(['platform_admin', 'super_admin', 'operator']), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const driver = storage.getDriverById(req.params.id, tenantId);
+  if (!driver) {
+    return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado.' });
+  }
+
+  const payoutAmount = driver.pendingBalance;
+  if (payoutAmount <= 0) {
+    return res.status(400).json({ error: 'no_balance', message: 'Sem saldo pendente para repasse.' });
+  }
+
+  driver.pendingBalance = 0;
+  storage.saveDriver(driver, tenantId);
+
+  storage.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'DRIVER_PIX_PAYOUT',
+    resource: 'drivers',
+    resourceId: driver.id,
+    details: { amount: payoutAmount, pixKey: driver.pixKey },
+    ipAddress: req.ip,
+  });
+
+  res.json({ success: true, paidAmount: payoutAmount });
+});
+
+// ============================================================================
+// 5. DEVICES (Strict Multi-Tenant Isolation & Cryptographic Pairing)
+// ============================================================================
+apiRouter.get('/devices', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  res.json(storage.getDevices(tenantId));
+});
+
+apiRouter.post('/devices', requireAuth, validateBody(DeviceSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const saved = storage.saveDevice(req.body as Device, tenantId);
+  if (!saved) {
+    return res.status(409).json({ error: 'conflict', message: 'Dispositivo já registrado em outro tenant.' });
+  }
+  res.status(201).json(saved);
+});
+
+apiRouter.put('/devices/:id', requireAuth, validateBody(DeviceSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const existing = storage.getDeviceById(req.params.id, tenantId);
+  if (!existing) {
+    return res.status(404).json({ error: 'not_found', message: 'Dispositivo não encontrado neste tenant.' });
+  }
+
+  const updated = storage.saveDevice(req.body as Device, tenantId);
+  res.json(updated);
+});
+
+apiRouter.delete('/devices/:id', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const deleted = storage.deleteDevice(req.params.id, tenantId);
+  if (!deleted) {
+    return res.status(404).json({ error: 'not_found', message: 'Dispositivo não encontrado neste tenant.' });
+  }
+  res.json({ success: true });
 });
 
 /**
- * Generate 6-digit one-time pairing code with 15-minute expiration
+ * Generate 6-digit pairing code for in-car tablet
  */
-apiRouter.post('/devices/pair-token', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const { driverId, screenPosition, hardwareOwnership } = req.body;
-
-  const token = generatePairingCode();
-  const expiresAt = Date.now() + 15 * 60 * 1000; // 15 mins
+apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const code = generatePairingCode();
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
   storage.createPairingToken({
-    token,
-    organizationId: orgId,
-    driverId,
-    screenPosition: screenPosition || 'headrest_right',
-    hardwareOwnership: hardwareOwnership || 'driver_byod',
+    token: code,
+    organizationId: tenantId,
+    driverId: req.body.driverId || '',
+    screenPosition: req.body.screenPosition || 'headrest_right',
+    hardwareOwnership: req.body.hardwareOwnership || 'driver_byod',
     expiresAt,
     used: false,
     createdAt: new Date().toISOString(),
   });
 
   res.json({
-    token,
+    pairingCode: code,
+    expiresInSeconds: 600,
     expiresAt: new Date(expiresAt).toISOString(),
-    expiresInSeconds: 900,
   });
 });
 
 /**
- * Tablet kiosk pairs itself with the one-time 6-digit code
+ * Cryptographic tablet pairing endpoint.
+ * Generates unique deviceSecret and saves device credentials.
  */
-apiRouter.post('/devices/pair', (req: Request, res: Response): void => {
-  const { token, serialNumber, model, macAddress, imei } = req.body;
+apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: Request, res: Response): void => {
+  const { pairingCode, model, serialNumber, screenPosition, hardwareOwnership } = req.body;
 
-  const record = storage.getPairingToken(token);
-  if (!record) {
-    res.status(400).json({ error: 'INVALID_TOKEN', message: 'Código de pareamento inválido ou expirado.' });
+  const tokenRecord = storage.getPairingToken(pairingCode);
+  if (!tokenRecord) {
+    res.status(400).json({ error: 'invalid_code', message: 'Código de pareamento inválido ou expirado.' });
     return;
   }
 
-  // Mark token used
-  storage.markPairingTokenUsed(token);
+  storage.markPairingTokenUsed(pairingCode);
 
-  const driver = storage.getDriverById(record.driverId);
-  const deviceId = `dev_${Date.now()}`;
-  const deviceCode = `TV-${record.organizationId.substring(4, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const orgId = tokenRecord.organizationId;
+  const driver = tokenRecord.driverId ? storage.getDriverById(tokenRecord.driverId, orgId) : undefined;
+  const deviceId = `dev_${Date.now().toString(36)}`;
+  const deviceCode = `TV-${orgId.substring(0, 4).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
   const deviceSecret = generateDeviceSecret();
 
   const newDevice: Device = {
     id: deviceId,
     code: deviceCode,
     serialNumber: serialNumber || `SN-${Date.now()}`,
-    driverId: record.driverId,
-    driverName: driver?.name || 'Motorista Parceiro',
-    carPlate: driver?.carPlate || 'BR-0000',
-    carModel: driver?.carModel || 'Toyota Corolla Hybrid 2024',
+    model: model || 'Android Tablet Kiosk',
+    screenPosition,
+    hardwareOwnership,
     status: 'online',
-    model: model || 'Samsung Galaxy Tab A9+ 11" 4G/5G',
-    screenPosition: record.screenPosition,
-    hardwareOwnership: record.hardwareOwnership,
+    driverId: driver?.id || '',
+    driverName: driver?.name || 'Não Atribuído',
+    carPlate: driver?.carPlate || '',
+    carModel: driver?.carModel || '',
     offlineQueueCount: 0,
-    currentLocation: {
-      lat: driver?.workingCenter?.lat || -23.561684,
-      lng: driver?.workingCenter?.lng || -46.655981,
+    currentLocation: driver?.workingCenter ? {
+      lat: driver.workingCenter.lat,
+      lng: driver.workingCenter.lng,
       speedKmH: 0,
       heading: 0,
-      address: driver?.workingRegion || 'Base Operacional',
-      neighborhood: driver?.workingCity || 'São Paulo',
-      city: driver?.workingCity || 'São Paulo',
-      state: 'SP',
-    },
+      city: driver.workingCity,
+    } : { lat: -23.561684, lng: -46.655981, speedKmH: 0, heading: 0, city: 'São Paulo' },
     telemetry: {
       powerConnected: true,
-      batteryLevel: 95,
-      batteryVoltage: 13.8,
-      cpuTemp: 37.0,
-      signalStrength: '5G',
-      signalDbm: -65,
-      storageFreeGb: 50.0,
-      totalStorageGb: 64.0,
+      batteryLevel: 100,
+      batteryVoltage: 12.6,
+      cpuTemp: 35.0,
+      signalStrength: '4G',
+      signalDbm: -72,
+      storageFreeGb: 16.0,
+      totalStorageGb: 32.0,
       currentFps: 60,
       brightness: 80,
-      volume: 35,
+      volume: 50,
       appVersion: '2.4.0-prod',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
-      screenUptimeTodayHours: 0.1,
-      uptimeHours: 0.1,
+      screenUptimeTodayHours: 0,
+      uptimeHours: 0,
       screenBrightnessPct: 80,
     },
     hardwareSpecs: {
-      brand: 'Samsung',
-      tabletModel: model || 'Galaxy Tab A9+ 11"',
-      screenSizeInches: 11.0,
-      resolution: '1920x1200 FHD+ WUXGA',
-      panelType: 'IPS Anti-Reflexo',
-      brightnessNits: 570,
+      brand: 'Android DOOH Hardware',
+      tabletModel: model,
+      screenSizeInches: 10.1,
+      resolution: '1920x1200',
+      panelType: 'IPS LCD',
+      brightnessNits: 500,
       aspectRatio: '16:10',
       orientation: 'landscape',
-      osVersion: 'Android 14 Enterprise',
-      macAddress: macAddress || '74:D0:2B:9F:8A:12',
-      imei: imei || '864920058291048',
-      connectivity: '5G_M2M',
-      mountType: 'Suporte Encosto Antifurto',
-      powerSupply: '12V Pós-Chave Veicular 5V/3A',
+      osVersion: 'Android 14',
+      macAddress: '02:00:00:00:00:01',
+      imei: '000000000000001',
+      simCarrier: 'IoT M2M',
+      connectivity: '4G_LTE',
+      mountType: 'Suporte de Encosto Antifurto',
+      powerSupply: '12V Pós-Chave',
+      storageGb: 32,
       ramGb: 4,
-      storageGb: 64,
+      refreshRateHz: 60,
     },
     totalImpressionsToday: 0,
     totalInteractionsToday: 0,
-    organizationId: record.organizationId,
+    organizationId: orgId,
   };
 
-  storage.saveDevice(newDevice);
+  storage.saveDevice(newDevice, orgId);
 
-  res.json({
-    success: true,
-    deviceId: newDevice.id,
-    deviceCode: newDevice.code,
+  // Store cryptographic credentials for this tablet
+  storage.saveDeviceCredential({
+    deviceId,
+    organizationId: orgId,
     deviceSecret,
-    organizationId: record.organizationId,
+    revoked: false,
+    createdAt: new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+  });
+
+  storage.logAudit({
+    organizationId: orgId,
+    action: 'DEVICE_PAIRED',
+    resource: 'devices',
+    resourceId: deviceId,
+    details: { model, serialNumber, driverId: driver?.id },
+    ipAddress: req.ip,
+  });
+
+  // Return device and one-time provisioned deviceSecret
+  res.status(201).json({
+    success: true,
+    device: newDevice,
+    deviceSecret,
+    organizationId: orgId,
   });
 });
 
-/**
- * Send remote command to a vehicle device
- */
-apiRouter.post('/devices/:id/command', (req: Request, res: Response) => {
-  const { command } = req.body;
-  const device = storage.getDeviceById(req.params.id);
+// ============================================================================
+// 6. CAMPAIGNS (Strict Multi-Tenant Isolation)
+// ============================================================================
+apiRouter.get('/campaigns', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  res.json(storage.getCampaigns(tenantId));
+});
 
-  const cmdRecord = {
-    id: `cmd_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    organizationId: device?.organizationId || 'org_sp_matriz',
-    deviceId: req.params.id,
-    command: command as any,
-    status: 'PENDING' as const,
-    createdAt: new Date().toISOString(),
-  };
+apiRouter.post('/campaigns', requireAuth, validateBody(CampaignSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const saved = storage.saveCampaign(req.body as Campaign, tenantId);
+  if (!saved) {
+    return res.status(409).json({ error: 'conflict', message: 'Campanha já existe em outro tenant.' });
+  }
+  res.status(201).json(saved);
+});
 
-  storage.createRemoteCommand(cmdRecord);
-
-  // If local device exists, update telemetry message
-  if (device) {
-    if (command === 'REBOOT_APP') {
-      device.telemetry.lastHeartbeat = 'Reiniciando Player...';
-    } else if (command === 'FORCE_SYNC') {
-      device.telemetry.lastHeartbeat = 'Cache 100% Sincronizado';
-    }
-    storage.saveDevice(device);
+apiRouter.put('/campaigns/:id', requireAuth, validateBody(CampaignSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const existing = storage.getCampaignById(req.params.id, tenantId);
+  if (!existing) {
+    return res.status(404).json({ error: 'not_found', message: 'Campanha não encontrada neste tenant.' });
   }
 
-  res.json({ success: true, commandId: cmdRecord.id });
+  const updated = storage.saveCampaign(req.body as Campaign, tenantId);
+  res.json(updated);
 });
 
-/**
- * Device queries pending commands
- */
-apiRouter.get('/devices/:id/commands', (req: Request, res: Response) => {
-  const pending = storage.getPendingCommands(req.params.id);
-  res.json(pending);
-});
-
-apiRouter.post('/devices/:id/commands/:cmdId/ack', (req: Request, res: Response) => {
-  storage.acknowledgeCommand(req.params.cmdId);
+apiRouter.delete('/campaigns/:id', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const deleted = storage.deleteCampaign(req.params.id, tenantId);
+  if (!deleted) {
+    return res.status(404).json({ error: 'not_found', message: 'Campanha não encontrada neste tenant.' });
+  }
   res.json({ success: true });
 });
 
 // ============================================================================
-// 6. CAMPAIGNS
+// 7. GEOFENCES (Strict Multi-Tenant Isolation)
 // ============================================================================
-apiRouter.get('/campaigns', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getCampaigns(orgId));
+apiRouter.get('/geofences', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  res.json(storage.getGeoFences(tenantId));
 });
 
-apiRouter.post('/campaigns', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const newCamp: Campaign = {
-    ...req.body,
-    id: req.body.id || `camp_${Date.now()}`,
-    organizationId: orgId,
-  };
-  storage.saveCampaign(newCamp);
-  res.status(201).json(newCamp);
+apiRouter.post('/geofences', requireAuth, validateBody(GeoFenceSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const saved = storage.saveGeoFence(req.body as GeoFence, tenantId);
+  if (!saved) {
+    return res.status(409).json({ error: 'conflict', message: 'GeoFence já existe em outro tenant.' });
+  }
+  res.status(201).json(saved);
 });
 
-apiRouter.put('/campaigns/:id', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const updated: Campaign = {
-    ...req.body,
-    id: req.params.id,
-    organizationId: orgId,
-  };
-  storage.saveCampaign(updated);
-  res.json(updated);
+apiRouter.delete('/geofences/:id', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const deleted = storage.deleteGeoFence(req.params.id, tenantId);
+  if (!deleted) {
+    return res.status(404).json({ error: 'not_found', message: 'GeoFence não encontrada neste tenant.' });
+  }
+  res.json({ success: true });
 });
 
-apiRouter.patch('/campaigns/:id/status', (req: Request, res: Response): void => {
-  const camp = storage.getCampaignById(req.params.id);
-  if (!camp) {
-    res.status(404).json({ error: 'NOT_FOUND' });
+// ============================================================================
+// 8. PROOF OF PLAY (Tamper-Proof, Anti-Replay & HMAC Cryptographic Validation)
+// ============================================================================
+apiRouter.get('/proof-of-play', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 500);
+  res.json(storage.getProofOfPlayLogs(tenantId, limit));
+});
+
+/**
+ * Ingest cryptographically signed Proof-of-Play from tablet.
+ * Section 6: Server NEVER signs on behalf of client. Requires valid signature and anti-replay nonce.
+ */
+apiRouter.post('/proof-of-play', validateBody(ProofOfPlaySubmissionSchema), (req: Request, res: Response): void => {
+  const item = req.body;
+  const endedAtTimestamp = new Date(item.endedAt).getTime();
+
+  if (isNaN(endedAtTimestamp)) {
+    res.status(400).json({ error: 'invalid_date', message: 'endedAt inválido.' });
     return;
   }
 
-  camp.status = camp.status === 'active' ? 'paused' : 'active';
-  storage.saveCampaign(camp);
-  res.json(camp);
-});
-
-apiRouter.delete('/campaigns/:id', (req: Request, res: Response) => {
-  const success = storage.deleteCampaign(req.params.id);
-  res.json({ success });
-});
-
-// ============================================================================
-// 7. GEOFENCES
-// ============================================================================
-apiRouter.get('/geofences', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getGeoFences(orgId));
-});
-
-apiRouter.post('/geofences', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const newGf: GeoFence = {
-    ...req.body,
-    id: req.body.id || `gf_${Date.now()}`,
-    organizationId: orgId,
-  };
-  storage.saveGeoFence(newGf);
-  res.status(201).json(newGf);
-});
-
-apiRouter.put('/geofences/:id', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const updated: GeoFence = {
-    ...req.body,
-    id: req.params.id,
-    organizationId: orgId,
-  };
-  storage.saveGeoFence(updated);
-  res.json(updated);
-});
-
-apiRouter.delete('/geofences/:id', (req: Request, res: Response) => {
-  const success = storage.deleteGeoFence(req.params.id);
-  res.json({ success });
-});
-
-// ============================================================================
-// 8. TELEMETRY & IOT INGESTION
-// ============================================================================
-apiRouter.post('/telemetry/heartbeat', (req: Request, res: Response): void => {
-  const { deviceId, batteryVoltage, cpuTemp, signalStrength, lat, lng, speedKmH, address, neighborhood } = req.body;
-  const dev = storage.getDeviceById(deviceId);
-
-  if (dev) {
-    if (batteryVoltage) dev.telemetry.batteryVoltage = Number(batteryVoltage);
-    if (cpuTemp) dev.telemetry.cpuTemp = Number(cpuTemp);
-    if (signalStrength) dev.telemetry.signalStrength = signalStrength;
-    dev.telemetry.lastHeartbeat = new Date().toISOString();
-
-    if (lat && lng) {
-      dev.currentLocation.lat = Number(lat);
-      dev.currentLocation.lng = Number(lng);
-      if (speedKmH !== undefined) dev.currentLocation.speedKmH = Number(speedKmH);
-      if (address) dev.currentLocation.address = address;
-      if (neighborhood) dev.currentLocation.neighborhood = neighborhood;
-    }
-    storage.saveDevice(dev);
+  // 1. Check anti-replay for eventId and nonce
+  const replayResult = storage.checkAndRecordReplay(item.eventId, item.nonce, endedAtTimestamp);
+  if (!replayResult.valid) {
+    res.status(400).json({
+      error: 'replay_detected',
+      message: replayResult.reason || 'Replay de Proof of Play detectado.',
+    });
+    return;
   }
 
-  res.json({ success: true, acknowledgedAt: new Date().toISOString() });
-});
+  // 2. Lookup device credentials
+  const cred = storage.getDeviceCredential(item.deviceId);
+  if (!cred || cred.revoked) {
+    res.status(401).json({
+      error: 'device_credentials_not_found',
+      message: 'Dispositivo sem credencial criptográfica ativa.',
+    });
+    return;
+  }
 
-// ============================================================================
-// 9. PROOF OF PLAY (AUDIT & VERIFICATION)
-// ============================================================================
-apiRouter.post('/proof-of-play/log', (req: Request, res: Response): void => {
-  const body = req.body;
-  const logsToProcess: ProofOfPlayLog[] = Array.isArray(body) ? body : [body];
-
-  let acceptedCount = 0;
-  for (const item of logsToProcess) {
-    // Generate/Validate HMAC signature
-    const signature = item.signature || signProofOfPlay({
-      eventId: item.id,
+  // 3. Verify HMAC signature using device secret
+  const isValid = verifyProofOfPlaySignature(
+    {
+      eventId: item.eventId,
       deviceId: item.deviceId,
       campaignId: item.campaignId,
       creativeId: item.creativeId,
-      startedAt: item.timestamp,
-      endedAt: item.timestamp,
-      durationMs: (item.durationSeconds || 15) * 1000,
-      nonce: item.nonce || `nonce_${item.id}`,
+      startedAt: item.startedAt,
+      endedAt: item.endedAt,
+      durationMs: item.durationMs,
+      nonce: item.nonce,
+      signature: item.signature,
+    },
+    cred.deviceSecret
+  );
+
+  if (!isValid) {
+    res.status(401).json({
+      error: 'invalid_proof_of_play_signature',
+      message: 'Assinatura HMAC de Proof of Play inválida ou adulterada.',
     });
-
-    const enrichedLog: ProofOfPlayLog = {
-      ...item,
-      signature,
-      organizationId: item.organizationId || 'org_sp_matriz',
-    };
-
-    const recorded = storage.recordProofOfPlay(enrichedLog);
-    if (recorded) acceptedCount++;
-  }
-
-  res.json({ success: true, count: acceptedCount });
-});
-
-apiRouter.post('/proof-of-play/verify', (req: Request, res: Response): void => {
-  const { eventId, deviceId, campaignId, startedAt, endedAt, durationMs, nonce, signature } = req.body;
-
-  if (!eventId || !deviceId || !campaignId || !signature) {
-    res.status(400).json({ error: 'MISSING_FIELDS', message: 'Campos obrigatórios para verificação ausentes.' });
     return;
   }
 
-  const isValid = verifyProofOfPlaySignature({
-    eventId,
-    deviceId,
-    campaignId,
-    startedAt: startedAt || new Date().toISOString(),
-    endedAt: endedAt || new Date().toISOString(),
-    durationMs: durationMs || 15000,
-    nonce: nonce || `nonce_${eventId}`,
-    signature,
-  });
+  // 4. Validate device and campaign belong to the same tenant
+  const tenantId = cred.organizationId;
+  const device = storage.getDeviceById(item.deviceId, tenantId);
+  const campaign = storage.getCampaignById(item.campaignId, tenantId);
+
+  if (!device || !campaign) {
+    res.status(404).json({
+      error: 'resource_not_found',
+      message: 'Dispositivo ou campanha não encontrados no tenant associado.',
+    });
+    return;
+  }
+
+  // 5. Record verified log
+  const durationSec = Math.round(item.durationMs / 1000);
+  const log: ProofOfPlayLog = {
+    id: item.eventId,
+    campaignId: item.campaignId,
+    campaignName: campaign.name,
+    advertiser: campaign.advertiser,
+    deviceId: item.deviceId,
+    startedAt: item.startedAt,
+    endedAt: item.endedAt,
+    durationWatchedSec: durationSec,
+    location: item.location,
+    interacted: item.interacted,
+    interactionType: item.interactionType,
+    verifiedHash: item.signature,
+    signature: item.signature,
+    nonce: item.nonce,
+    syncedOnline: true,
+    organizationId: tenantId,
+  };
+
+  const recorded = storage.recordProofOfPlay(log, tenantId);
+  res.json({ success: true, recorded, eventId: item.eventId });
+});
+
+// ============================================================================
+// 9. TELEMETRY & HARDWARE HEARTBEAT (Authenticated)
+// ============================================================================
+apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, validateBody(TelemetryHeartbeatSchema), (req: Request, res: Response) => {
+  const device = req.device!;
+  const tenantId = req.resolvedTenantId!;
+  const body = req.body;
+
+  const existing = storage.getDeviceById(device.id, tenantId);
+  if (existing) {
+    existing.currentLocation = {
+      ...existing.currentLocation,
+      lat: body.lat,
+      lng: body.lng,
+      speedKmH: body.speedKmH,
+      heading: body.heading,
+    };
+    existing.telemetry = {
+      ...existing.telemetry,
+      batteryLevel: body.batteryLevel,
+      powerConnected: body.powerConnected,
+      signalStrength: body.signalStrength,
+      cpuTemp: body.cpuTemp || existing.telemetry.cpuTemp,
+      appVersion: body.appVersion,
+      lastHeartbeat: new Date().toISOString(),
+    };
+    storage.saveDevice(existing, tenantId);
+  }
+
+  // Get pending commands for this tablet
+  const pendingCommands = storage.getPendingCommands(device.id, tenantId);
 
   res.json({
-    verified: isValid,
-    algorithm: 'HMAC-SHA256',
-    eventId,
-    checkedAt: new Date().toISOString(),
+    status: 'ok',
+    deviceId: device.id,
+    pendingCommands,
   });
 });
 
-apiRouter.get('/proof-of-play/logs', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const limit = req.query.limit ? Number(req.query.limit) : 100;
-  res.json(storage.getProofOfPlayLogs(orgId, limit));
-});
-
 // ============================================================================
-// 10. ADVERTISERS & BILLING
+// 10. REMOTE COMMANDS (MDM)
 // ============================================================================
-apiRouter.get('/advertisers', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getAdvertisers(orgId));
-});
-
-apiRouter.post('/advertisers', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  const newAdv = {
-    ...req.body,
-    id: req.body.id || `adv_${Date.now()}`,
-    organizationId: orgId,
-  };
-  storage.saveAdvertiser(newAdv);
-  res.status(201).json(newAdv);
-});
-
-apiRouter.get('/billing/invoices', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getInvoices(orgId));
-});
-
-apiRouter.post('/billing/invoices/:id/generate-pix', async (req: Request, res: Response): Promise<void> => {
-  const invoices = storage.getInvoices();
-  const invoice = invoices.find(i => i.id === req.params.id);
-
-  if (!invoice) {
-    res.status(404).json({ error: 'INVOICE_NOT_FOUND' });
-    return;
+apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), validateBody(RemoteCommandSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const device = storage.getDeviceById(req.body.deviceId, tenantId);
+  if (!device) {
+    return res.status(404).json({ error: 'not_found', message: 'Dispositivo não encontrado no seu tenant.' });
   }
 
-  const pixData = await pixGateway.createPixCharge({
-    invoiceId: invoice.id,
-    amount: invoice.amount,
-    description: `Assinatura VeloMedia DOOH - ${invoice.month}`,
-    payerCnpjOrCpf: '00.000.000/0001-00',
-    payerName: invoice.organizationName,
+  const cmdId = `cmd_${Date.now().toString(36)}`;
+  storage.createRemoteCommand({
+    id: cmdId,
+    organizationId: tenantId,
+    deviceId: device.id,
+    command: req.body.command,
+    status: 'PENDING',
+    createdAt: new Date().toISOString(),
   });
 
-  invoice.pixQrCode = pixData.copiaECola;
-  storage.saveInvoice(invoice);
+  storage.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'REMOTE_COMMAND_DISPATCHED',
+    resource: 'remote_commands',
+    resourceId: cmdId,
+    details: { command: req.body.command, deviceId: device.id },
+    ipAddress: req.ip,
+  });
+
+  res.status(201).json({ success: true, commandId: cmdId });
+});
+
+apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, (req: Request, res: Response) => {
+  const tenantId = req.resolvedTenantId || resolveTenant(req);
+  const acknowledged = storage.acknowledgeCommand(req.params.id, tenantId);
+  if (!acknowledged) {
+    return res.status(404).json({ error: 'not_found', message: 'Comando não encontrado.' });
+  }
+  res.json({ success: true });
+});
+
+// ============================================================================
+// 11. ADVERTISERS & INVOICES (Strict Multi-Tenant Isolation)
+// ============================================================================
+apiRouter.get('/advertisers', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  res.json(storage.getAdvertisers(tenantId));
+});
+
+apiRouter.post('/advertisers', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const saved = storage.saveAdvertiser(req.body as AdvertiserAccount, tenantId);
+  if (!saved) {
+    return res.status(409).json({ error: 'conflict', message: 'Anunciante já existe em outro tenant.' });
+  }
+  res.status(201).json(saved);
+});
+
+apiRouter.delete('/advertisers/:id', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const deleted = storage.deleteAdvertiser(req.params.id, tenantId);
+  if (!deleted) {
+    return res.status(404).json({ error: 'not_found', message: 'Anunciante não encontrado neste tenant.' });
+  }
+  res.json({ success: true });
+});
+
+apiRouter.get('/invoices', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  res.json(storage.getInvoices(tenantId));
+});
+
+apiRouter.post('/invoices', requireAuth, (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const saved = storage.saveInvoice(req.body as SaaSInvoice, tenantId);
+  if (!saved) {
+    return res.status(409).json({ error: 'conflict', message: 'Fatura já existe em outro tenant.' });
+  }
+  res.status(201).json(saved);
+});
+
+/**
+ * PIX charge generation with provider check.
+ * Section 11: If gateway is unconfigured, explicitly returns payment_provider_not_configured.
+ */
+apiRouter.post('/invoices/:id/charge-pix', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const invoice = storage.getInvoiceById(req.params.id, tenantId);
+  if (!invoice) {
+    return res.status(404).json({ error: 'not_found', message: 'Fatura não encontrada.' });
+  }
+
+  const result = await pixGateway.createPixCharge({
+    invoiceId: invoice.id,
+    amount: invoice.amount,
+    organizationName: invoice.organizationName,
+    description: `Fatura VeloMedia DOOH #${invoice.invoiceNumber}`,
+  });
+
+  if (result.status === 'payment_provider_not_configured') {
+    return res.status(503).json({
+      error: 'payment_provider_not_configured',
+      message: result.error || 'Provedor de pagamentos PIX não está configurado neste ambiente.',
+    });
+  }
+
+  invoice.txid = result.txid;
+  invoice.pixQrCode = result.copiaECola;
+  storage.saveInvoice(invoice, tenantId);
 
   res.json({
     success: true,
-    pixData,
+    txid: result.txid,
+    copiaECola: result.copiaECola,
+    qrCodeSvg: result.qrCodeSvg,
+    expiresAt: result.expiresAt,
   });
 });
 
+/**
+ * Webhook callback with signature verification & deduplication
+ */
+apiRouter.post('/webhooks/pix', (req: Request, res: Response) => {
+  const signature = req.headers['x-webhook-signature'] as string || '';
+  const rawBody = JSON.stringify(req.body);
+
+  const result = pixGateway.processWebhookEvent(rawBody, signature);
+  if (!result.success) {
+    return res.status(401).json({ error: 'invalid_signature', message: result.reason });
+  }
+
+  if (result.duplicate) {
+    return res.json({ status: 'ignored_duplicate' });
+  }
+
+  // Update invoice if matched
+  const event = result.event;
+  if (event?.invoiceId && event?.status === 'paid') {
+    const orgs = storage.getOrganizations();
+    for (const org of orgs) {
+      const inv = storage.getInvoiceById(event.invoiceId, org.id);
+      if (inv) {
+        inv.status = 'paid';
+        inv.paidAt = new Date().toISOString();
+        storage.saveInvoice(inv, org.id);
+        break;
+      }
+    }
+  }
+
+  res.json({ status: 'processed' });
+});
+
 // ============================================================================
-// 11. AUDIT TRAIL
+// 12. AUDIT LOGS
 // ============================================================================
-apiRouter.get('/audit/logs', (req: Request, res: Response) => {
-  const orgId = resolveTenant(req);
-  res.json(storage.getAuditLogs(orgId));
+apiRouter.get('/audit-logs', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 1000);
+  res.json(storage.getAuditLogs(tenantId, limit));
+});
+
+// ============================================================================
+// 13. DEV SIMULATOR (Strictly Disabled in Production)
+// ============================================================================
+apiRouter.post('/simulate/pop', requireAuth, (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === 'production' || process.env.SIMULATION_ENABLED !== 'true') {
+    return res.status(403).json({
+      error: 'simulation_disabled',
+      message: 'Simuladores de telemetria e PoP estão desativados neste ambiente por políticas de segurança.',
+    });
+  }
+
+  res.json({ success: true, message: 'Simulação aceita em ambiente de desenvolvimento.' });
 });

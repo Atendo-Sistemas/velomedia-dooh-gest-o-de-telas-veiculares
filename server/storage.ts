@@ -1,4 +1,6 @@
-import fs from 'node:fs';
+import fs from 'node:crypto';
+import fsPromises from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { hashPassword } from './crypto';
 import type { 
@@ -59,6 +61,28 @@ export interface SessionRecord {
   createdAt: string;
 }
 
+export interface DeviceCredentialRecord {
+  deviceId: string;
+  organizationId: string;
+  deviceSecret: string;
+  revoked: boolean;
+  createdAt: string;
+  lastSeenAt?: string;
+}
+
+export interface ReplayRecord {
+  eventId: string;
+  nonce: string;
+  timestamp: number;
+}
+
+export interface WebhookRecord {
+  eventId: string;
+  provider: string;
+  processedAt: string;
+  payloadHash: string;
+}
+
 interface DatabaseSchema {
   version: number;
   organizations: SaaSOrganization[];
@@ -74,28 +98,47 @@ interface DatabaseSchema {
   pairingTokens: PairingTokenRecord[];
   remoteCommands: RemoteCommandRecord[];
   sessions: SessionRecord[];
+  deviceCredentials: DeviceCredentialRecord[];
+  replayLogs: ReplayRecord[];
+  webhooks: WebhookRecord[];
 }
 
 export class VeloStorage {
   private dataFilePath: string;
   private memoryDb: DatabaseSchema;
   private isSaving: boolean = false;
+  private pendingSave: boolean = false;
 
   constructor(filePath?: string) {
     this.dataFilePath = filePath || path.join(process.cwd(), 'data', 'velomedia_store.json');
+    
+    // Production Persistence Guard: JSON storage is prohibited in production unless explicitly allowed for testing
+    if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_DEV_STORAGE_IN_PROD) {
+      if (!process.env.DATABASE_URL) {
+        throw new Error(
+          '[FATAL SECURITY EXCEPTION] Production requires PostgreSQL persistence (DATABASE_URL is missing). ' +
+          'JSON file storage is strictly prohibited in production mode.'
+        );
+      }
+    }
+
     this.memoryDb = this.loadInitial();
   }
 
   private loadInitial(): DatabaseSchema {
     try {
       const dir = path.dirname(this.dataFilePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      if (!fsSync.existsSync(dir)) {
+        fsSync.mkdirSync(dir, { recursive: true });
       }
 
-      if (fs.existsSync(this.dataFilePath)) {
-        const raw = fs.readFileSync(this.dataFilePath, 'utf-8');
-        return JSON.parse(raw);
+      if (fsSync.existsSync(this.dataFilePath)) {
+        const raw = fsSync.readFileSync(this.dataFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (!parsed.deviceCredentials) parsed.deviceCredentials = [];
+        if (!parsed.replayLogs) parsed.replayLogs = [];
+        if (!parsed.webhooks) parsed.webhooks = [];
+        return parsed;
       }
     } catch (err) {
       console.warn('[VeloStorage] Could not read existing store, creating fresh store with seed:', err);
@@ -105,16 +148,21 @@ export class VeloStorage {
   }
 
   private createSeedDatabase(): DatabaseSchema {
-    const defaultPassword = 'VeloAdmin2026!';
-    const adminHash = hashPassword(defaultPassword);
+    const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || (
+      process.env.NODE_ENV === 'production'
+        ? (() => { throw new Error('[SECURITY CONFIG] INITIAL_ADMIN_PASSWORD must be defined in production.'); })()
+        : 'VeloAdminDemo2026!'
+    );
+    const adminHash = hashPassword(adminPassword);
 
+    // LGPD-compliant seed data with sanitized demo domains (.invalid) and mock CNPJs
     const initialOrgs: SaaSOrganization[] = [
       {
         id: 'org_sp_matriz',
         name: 'VeloMedia São Paulo (Matriz Operadora)',
         slug: 'sp-matriz',
-        subdomain: 'sp.velomedia.com.br',
-        cnpj: '48.912.304/0001-92',
+        subdomain: 'sp.velomedia.demo.invalid',
+        cnpj: '00.000.000/0001-91',
         city: 'São Paulo',
         state: 'SP',
         planTier: 'enterprise_network',
@@ -126,10 +174,10 @@ export class VeloStorage {
         maxDriversLimit: 300,
         adminUser: {
           name: 'Carlos Albuquerque',
-          email: 'admin@velomedia.com.br',
-          phone: '(11) 98123-4567',
+          email: 'admin@demo.velomedia.invalid',
+          phone: '(11) 90000-0001',
         },
-        billingEmail: 'financeiro@velomedia.com.br',
+        billingEmail: 'financeiro@demo.velomedia.invalid',
         billingCycle: 'monthly',
         nextBillingDate: '2026-10-05',
         monthlySoftwareCost: 5490,
@@ -142,8 +190,8 @@ export class VeloStorage {
         id: 'org_rio_frota',
         name: 'Carioca DOOH Mobilidade RJ',
         slug: 'rio-frota',
-        subdomain: 'rio.velomedia.com.br',
-        cnpj: '39.812.901/0001-44',
+        subdomain: 'rio.velomedia.demo.invalid',
+        cnpj: '00.000.000/0002-72',
         city: 'Rio de Janeiro',
         state: 'RJ',
         planTier: 'pro_fleet',
@@ -155,10 +203,10 @@ export class VeloStorage {
         maxDriversLimit: 100,
         adminUser: {
           name: 'Renata Lemos',
-          email: 'operacoes@cariocadooh.com.br',
-          phone: '(21) 99876-5432',
+          email: 'operacoes@rio.demo.invalid',
+          phone: '(21) 90000-0002',
         },
-        billingEmail: 'financeiro@cariocadooh.com.br',
+        billingEmail: 'financeiro@rio.demo.invalid',
         billingCycle: 'monthly',
         nextBillingDate: '2026-10-10',
         monthlySoftwareCost: 1990,
@@ -174,7 +222,7 @@ export class VeloStorage {
         id: 'user_master',
         name: 'Administrador Velo Master',
         email: 'admin@velomedia.com.br',
-        phone: '(11) 98123-4567',
+        phone: '(11) 90000-0001',
         role: 'platform_admin',
         organizationId: 'org_sp_matriz',
         organizationName: 'VeloMedia São Paulo',
@@ -186,9 +234,9 @@ export class VeloStorage {
       },
       {
         id: 'user_sp_operator',
-        name: 'Lucas Ferreira',
+        name: 'Operador São Paulo',
         email: 'operador@velomedia.com.br',
-        phone: '(11) 98765-1122',
+        phone: '(11) 90000-0003',
         role: 'operator',
         organizationId: 'org_sp_matriz',
         organizationName: 'VeloMedia São Paulo',
@@ -203,14 +251,14 @@ export class VeloStorage {
     const initialDrivers: Driver[] = [
       {
         id: 'drv_01',
-        name: 'Marcos Vinicius Ribeiro',
+        name: 'Motorista Demonstração SP',
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80',
-        carPlate: 'BRA-2E19',
-        carModel: 'Toyota Corolla Hybrid 2024',
+        carPlate: 'BRA-0A01',
+        carModel: 'Sedan Híbrido Teste 2024',
         carColor: 'Preto',
         serviceType: 'Uber Black',
-        phone: '(11) 98765-4321',
-        pixKey: 'marcos.ribeiro.pix@banco.com.br',
+        phone: '(11) 90000-1111',
+        pixKey: 'driver01@demo.velomedia.invalid',
         pixKeyType: 'EMAIL',
         totalRidesMonth: 285,
         totalEarningsMonth: 1450.8,
@@ -218,7 +266,7 @@ export class VeloStorage {
         monthlyEarnings: 1450.8,
         rating: 4.96,
         screenUptimeRating: 98.4,
-        referralCode: 'MARCOS-VELO',
+        referralCode: 'DRIVER01-DEMO',
         workingCity: 'São Paulo',
         workingRegion: 'Centro Expandido e Av. Paulista',
         workingCenter: { lat: -23.561684, lng: -46.655981 },
@@ -228,14 +276,14 @@ export class VeloStorage {
       },
       {
         id: 'drv_02',
-        name: 'Rodrigo Mendonça Santos',
+        name: 'Motorista Demonstração RJ',
         avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=120&q=80',
-        carPlate: 'RIO-9F31',
-        carModel: 'BYD Dolphin EV 2024',
+        carPlate: 'RIO-0B02',
+        carModel: 'Veículo Elétrico Teste 2024',
         carColor: 'Branco',
         serviceType: 'Uber Comfort',
-        phone: '(11) 97654-3210',
-        pixKey: '11976543210',
+        phone: '(21) 90000-2222',
+        pixKey: '21900002222',
         pixKeyType: 'TELEFONE',
         totalRidesMonth: 210,
         totalEarningsMonth: 980.2,
@@ -243,7 +291,7 @@ export class VeloStorage {
         monthlyEarnings: 980.2,
         rating: 4.92,
         screenUptimeRating: 96.8,
-        referralCode: 'RODRIGO-VELO',
+        referralCode: 'DRIVER02-DEMO',
         workingCity: 'São Paulo',
         workingRegion: 'Zona Sul / Berrini / Aeroporto CGH',
         workingCenter: { lat: -23.60005, lng: -46.6908 },
@@ -259,9 +307,9 @@ export class VeloStorage {
         code: 'TV-SP-8491',
         serialNumber: 'SAM-A9P-2025-0012',
         driverId: 'drv_01',
-        driverName: 'Marcos Vinicius Ribeiro',
-        carPlate: 'BRA-2E19',
-        carModel: 'Toyota Corolla Hybrid 2024',
+        driverName: 'Motorista Demonstração SP',
+        carPlate: 'BRA-0A01',
+        carModel: 'Sedan Híbrido Teste 2024',
         status: 'online',
         model: 'Samsung Galaxy Tab A9+ 11" 5G Homologado',
         screenPosition: 'headrest_right',
@@ -306,9 +354,9 @@ export class VeloStorage {
           aspectRatio: '16:10',
           orientation: 'landscape',
           osVersion: 'Android 14 OneUI 6.0 Kiosk Locked',
-          macAddress: '74:D0:2B:9F:8A:12',
-          imei: '864920058291048',
-          simCarrier: 'Claro Empresas M2M IoT',
+          macAddress: '02:00:00:00:00:01',
+          imei: '000000000000001',
+          simCarrier: 'M2M Telecom IoT',
           connectivity: '5G_M2M',
           mountType: 'Suporte de Encosto em Alumínio c/ Trava Antifurto Allen',
           powerSupply: '12V Pós-Chave c/ Conversor Step-Down 5V/3A & Fusível',
@@ -322,12 +370,24 @@ export class VeloStorage {
       },
     ];
 
+    // Seed device credential for dev_01 with dedicated cryptographic secret
+    const initialDeviceCredentials: DeviceCredentialRecord[] = [
+      {
+        deviceId: 'dev_01',
+        organizationId: 'org_sp_matriz',
+        deviceSecret: 'dev_secret_01_sample_seed',
+        revoked: false,
+        createdAt: '2025-01-15T10:00:00Z',
+        lastSeenAt: new Date().toISOString(),
+      },
+    ];
+
     const initialCampaigns: Campaign[] = [
       {
         id: 'camp_01',
-        title: 'Nubank Ultravioleta - Alta Renda',
-        name: 'Nubank Ultravioleta - Alta Renda',
-        advertiser: 'Nubank Brasil',
+        title: 'Campanha FinTech Ultravioleta - Demo',
+        name: 'Campanha FinTech Ultravioleta - Demo',
+        advertiser: 'FinTech Demonstração Brasil',
         logo: 'https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=120&q=80',
         category: 'tech_finance',
         status: 'active',
@@ -342,12 +402,12 @@ export class VeloStorage {
         targetGeoFences: ['all'],
         creative: {
           id: 'crt_01',
-          title: 'Nubank Ultravioleta',
+          title: 'Cartão Black Corporativo',
           tagline: 'O cartão de crédito para quem valoriza seu tempo',
           type: 'video',
           mediaUrl: 'https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=1280&q=80',
           ctaText: 'Solicitar Cartão',
-          qrCodeUrl: 'https://nubank.com.br/ultravioleta',
+          qrCodeUrl: 'https://demo.velomedia.invalid/solicitar',
           audioEnabledByDefault: false,
           durationSeconds: 15,
         },
@@ -361,9 +421,9 @@ export class VeloStorage {
       },
       {
         id: 'camp_02',
-        title: 'Fasano Hotel & Gastronomia - Jardins',
-        name: 'Fasano Hotel & Gastronomia - Jardins',
-        advertiser: 'Grupo Fasano',
+        title: 'Gastronomia Jardins - Demo',
+        name: 'Gastronomia Jardins - Demo',
+        advertiser: 'Grupo Gastronômico Demo',
         logo: 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=120&q=80',
         category: 'food_beverage',
         status: 'active',
@@ -378,12 +438,12 @@ export class VeloStorage {
         targetGeoFences: ['gf_sp_jardins'],
         creative: {
           id: 'crt_02',
-          title: 'Fasano Gastronomia',
-          tagline: 'Experiência gastronômica inesquecível nos Jardins',
+          title: 'Alta Gastronomia',
+          tagline: 'Experiência inesquecível nos Jardins',
           type: 'interactive_banner',
           mediaUrl: 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1280&q=80',
           ctaText: 'Reservar Mesa',
-          qrCodeUrl: 'https://fasano.com.br/reservas',
+          qrCodeUrl: 'https://demo.velomedia.invalid/reservas',
           audioEnabledByDefault: false,
           durationSeconds: 10,
         },
@@ -434,23 +494,23 @@ export class VeloStorage {
         dueDate: '2026-09-10',
         status: 'paid',
         paymentMethod: 'pix',
-        pixQrCode: '00020126580014br.gov.bcb.pix0136velomedia-pix-key-sample52040000530398654075490.005802BR5918VELOMEDIA DOOH SA6009SAO PAULO62070503***6304ABCD',
-        pixQrCodeUrl: '00020126580014br.gov.bcb.pix0136velomedia-pix-key-sample52040000530398654075490.005802BR5918VELOMEDIA DOOH SA6009SAO PAULO62070503***6304ABCD',
+        pixQrCode: '00020126580014br.gov.bcb.pix0136velomedia-demo-key52040000530398654075490.005802BR5918VELOMEDIA DEMO SA6009SAO PAULO62070503***6304ABCD',
+        pixQrCodeUrl: '00020126580014br.gov.bcb.pix0136velomedia-demo-key52040000530398654075490.005802BR5918VELOMEDIA DEMO SA6009SAO PAULO62070503***6304ABCD',
       },
     ];
 
     const initialAdvertisers: AdvertiserAccount[] = [
       {
-        id: 'adv_nubank',
-        name: 'Nubank Brasil',
-        companyName: 'Nu Pagamentos S.A.',
-        tradeName: 'Nubank',
-        cnpj: '18.236.120/0001-58',
+        id: 'adv_fintech',
+        name: 'FinTech Demonstração S.A.',
+        companyName: 'FinTech Demonstração S.A.',
+        tradeName: 'FinTech Demo',
+        cnpj: '00.000.000/0003-53',
         category: 'tech_finance',
-        contactName: 'Fernanda Lima',
-        email: 'marketing@nubank.com.br',
-        phone: '(11) 3003-8888',
-        billingAddress: 'Rua Capote Valente, 39 - Pinheiros',
+        contactName: 'Contato Comercial',
+        email: 'marketing@fintech.demo.invalid',
+        phone: '(11) 90000-3333',
+        billingAddress: 'Av. Exemplo, 100 - Centro',
         city: 'São Paulo',
         state: 'SP',
         paymentTerms: 'monthly_retainer',
@@ -460,21 +520,21 @@ export class VeloStorage {
         status: 'active',
         activeCampaignsCount: 1,
         totalSpent: 8450.5,
-        portalAccessCode: 'NU2026',
+        portalAccessCode: 'DEMO2026',
         createdAt: '2025-01-20T10:00:00Z',
         organizationId: 'org_sp_matriz',
       },
       {
-        id: 'adv_fasano',
-        name: 'Grupo Fasano',
-        companyName: 'Hotelaria e Gastronomia Fasano Ltda',
-        tradeName: 'Fasano Jardins',
-        cnpj: '03.882.102/0001-30',
+        id: 'adv_gastronomia',
+        name: 'Gastronomia Demo Ltda',
+        companyName: 'Gastronomia Demo Ltda',
+        tradeName: 'Restaurante Demo',
+        cnpj: '00.000.000/0004-34',
         category: 'food_beverage',
-        contactName: 'Rogerio Fasano',
-        email: 'contato@fasano.com.br',
-        phone: '(11) 3896-4000',
-        billingAddress: 'Rua Vittorio Fasano, 88 - Cerqueira César',
+        contactName: 'Gerente Demo',
+        email: 'contato@gastronomia.demo.invalid',
+        phone: '(11) 90000-4444',
+        billingAddress: 'Rua Gastronômica, 88 - Jardins',
         city: 'São Paulo',
         state: 'SP',
         paymentTerms: 'prepaid',
@@ -484,14 +544,14 @@ export class VeloStorage {
         status: 'active',
         activeCampaignsCount: 1,
         totalSpent: 5120.0,
-        portalAccessCode: 'FASANO2026',
+        portalAccessCode: 'REST2026',
         createdAt: '2025-02-15T14:00:00Z',
         organizationId: 'org_sp_matriz',
       },
     ];
 
     const schema: DatabaseSchema = {
-      version: 1,
+      version: 2,
       organizations: initialOrgs,
       users: initialUsers,
       drivers: initialDrivers,
@@ -505,39 +565,54 @@ export class VeloStorage {
       pairingTokens: [],
       remoteCommands: [],
       sessions: [],
+      deviceCredentials: initialDeviceCredentials,
+      replayLogs: [],
+      webhooks: [],
     };
 
     this.saveImmediate(schema);
     return schema;
   }
 
+  /**
+   * Atomic sequential disk write avoiding dropped updates under concurrency.
+   */
   private save(): void {
-    if (this.isSaving) return;
+    if (this.isSaving) {
+      this.pendingSave = true;
+      return;
+    }
+
     this.isSaving = true;
+    this.pendingSave = false;
+
     setTimeout(() => {
       try {
         const dir = path.dirname(this.dataFilePath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
+        if (!fsSync.existsSync(dir)) {
+          fsSync.mkdirSync(dir, { recursive: true });
         }
-        const tempPath = `${this.dataFilePath}.tmp`;
-        fs.writeFileSync(tempPath, JSON.stringify(this.memoryDb, null, 2), 'utf-8');
-        fs.renameSync(tempPath, this.dataFilePath);
+        const tempPath = `${this.dataFilePath}.${Date.now()}.tmp`;
+        fsSync.writeFileSync(tempPath, JSON.stringify(this.memoryDb, null, 2), 'utf-8');
+        fsSync.renameSync(tempPath, this.dataFilePath);
       } catch (err) {
-        console.error('[VeloStorage] Save error:', err);
+        console.error('[VeloStorage] Atomic save error:', err);
       } finally {
         this.isSaving = false;
+        if (this.pendingSave) {
+          this.save();
+        }
       }
-    }, 50);
+    }, 10);
   }
 
   private saveImmediate(schema: DatabaseSchema): void {
     try {
       const dir = path.dirname(this.dataFilePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      if (!fsSync.existsSync(dir)) {
+        fsSync.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(this.dataFilePath, JSON.stringify(schema, null, 2), 'utf-8');
+      fsSync.writeFileSync(this.dataFilePath, JSON.stringify(schema, null, 2), 'utf-8');
     } catch (err) {
       console.error('[VeloStorage] saveImmediate error:', err);
     }
@@ -579,8 +654,8 @@ export class VeloStorage {
       .map(({ passwordHash, ...safeUser }) => safeUser);
   }
 
-  public getUserById(id: string): SaaSUser | undefined {
-    const user = this.memoryDb.users.find(u => u.id === id);
+  public getUserById(id: string, orgId?: string): SaaSUser | undefined {
+    const user = this.memoryDb.users.find(u => u.id === id && (!orgId || u.organizationId === orgId));
     if (!user) return undefined;
     const { passwordHash, ...safe } = user;
     return safe;
@@ -604,9 +679,9 @@ export class VeloStorage {
     this.save();
   }
 
-  public deleteUser(id: string): boolean {
+  public deleteUser(id: string, orgId?: string): boolean {
     const before = this.memoryDb.users.length;
-    this.memoryDb.users = this.memoryDb.users.filter(u => u.id !== id);
+    this.memoryDb.users = this.memoryDb.users.filter(u => !(u.id === id && (!orgId || u.organizationId === orgId)));
     if (this.memoryDb.users.length !== before) {
       this.save();
       return true;
@@ -616,7 +691,6 @@ export class VeloStorage {
 
   // --- SESSIONS ---
   public createSession(session: SessionRecord): void {
-    // Purge expired sessions
     const now = Date.now();
     this.memoryDb.sessions = this.memoryDb.sessions.filter(s => s.expiresAt > now);
     this.memoryDb.sessions.push(session);
@@ -632,33 +706,46 @@ export class VeloStorage {
     return session;
   }
 
-  public deleteSession(token: string): void {
+  public deleteSession(token: string): boolean {
+    const before = this.memoryDb.sessions.length;
     this.memoryDb.sessions = this.memoryDb.sessions.filter(s => s.token !== token);
-    this.save();
+    if (this.memoryDb.sessions.length !== before) {
+      this.save();
+      return true;
+    }
+    return false;
   }
 
-  // --- DRIVERS ---
-  public getDrivers(orgId?: string): Driver[] {
-    return this.memoryDb.drivers.filter(d => !orgId || d.organizationId === orgId);
+  // --- DRIVERS (STRICT MULTI-TENANT ISOLATION) ---
+  public getDrivers(orgId: string): Driver[] {
+    return this.memoryDb.drivers.filter(d => d.organizationId === orgId);
   }
 
-  public getDriverById(id: string): Driver | undefined {
-    return this.memoryDb.drivers.find(d => d.id === id);
+  public getDriverById(id: string, orgId: string): Driver | undefined {
+    return this.memoryDb.drivers.find(d => d.id === id && d.organizationId === orgId);
   }
 
-  public saveDriver(driver: Driver): void {
-    const idx = this.memoryDb.drivers.findIndex(d => d.id === driver.id);
+  public saveDriver(driver: Driver, orgId: string): Driver | null {
+    // Cross-tenant check: ID must not belong to another organization
+    const existingOtherTenant = this.memoryDb.drivers.find(d => d.id === driver.id && d.organizationId !== orgId);
+    if (existingOtherTenant) {
+      return null;
+    }
+
+    const driverWithOrg = { ...driver, organizationId: orgId };
+    const idx = this.memoryDb.drivers.findIndex(d => d.id === driver.id && d.organizationId === orgId);
     if (idx >= 0) {
-      this.memoryDb.drivers[idx] = driver;
+      this.memoryDb.drivers[idx] = driverWithOrg;
     } else {
-      this.memoryDb.drivers.unshift(driver);
+      this.memoryDb.drivers.unshift(driverWithOrg);
     }
     this.save();
+    return driverWithOrg;
   }
 
-  public deleteDriver(id: string): boolean {
+  public deleteDriver(id: string, orgId: string): boolean {
     const before = this.memoryDb.drivers.length;
-    this.memoryDb.drivers = this.memoryDb.drivers.filter(d => d.id !== id);
+    this.memoryDb.drivers = this.memoryDb.drivers.filter(d => !(d.id === id && d.organizationId === orgId));
     if (this.memoryDb.drivers.length !== before) {
       this.save();
       return true;
@@ -666,57 +753,146 @@ export class VeloStorage {
     return false;
   }
 
-  // --- DEVICES ---
-  public getDevices(orgId?: string): Device[] {
-    return this.memoryDb.devices.filter(d => !orgId || d.organizationId === orgId);
+  // --- DEVICES (STRICT MULTI-TENANT ISOLATION) ---
+  public getDevices(orgId: string): Device[] {
+    return this.memoryDb.devices.filter(d => d.organizationId === orgId);
   }
 
-  public getDeviceById(id: string): Device | undefined {
+  public getDeviceById(id: string, orgId: string): Device | undefined {
+    return this.memoryDb.devices.find(d => (d.id === id || d.code === id) && d.organizationId === orgId);
+  }
+
+  /**
+   * Internal lookup by deviceId without org filter (used by device auth middleware to locate tenant)
+   */
+  public getDeviceByIdInternal(id: string): Device | undefined {
     return this.memoryDb.devices.find(d => d.id === id || d.code === id);
   }
 
-  public saveDevice(dev: Device): void {
-    const idx = this.memoryDb.devices.findIndex(d => d.id === dev.id);
+  public saveDevice(dev: Device, orgId: string): Device | null {
+    const existingOther = this.memoryDb.devices.find(d => d.id === dev.id && d.organizationId !== orgId);
+    if (existingOther) {
+      return null;
+    }
+
+    const deviceWithOrg = { ...dev, organizationId: orgId };
+    const idx = this.memoryDb.devices.findIndex(d => d.id === dev.id && d.organizationId === orgId);
     if (idx >= 0) {
-      this.memoryDb.devices[idx] = dev;
+      this.memoryDb.devices[idx] = deviceWithOrg;
     } else {
-      this.memoryDb.devices.unshift(dev);
+      this.memoryDb.devices.unshift(deviceWithOrg);
     }
     this.save();
+    return deviceWithOrg;
   }
 
-  public deleteDevice(id: string): boolean {
+  public deleteDevice(id: string, orgId: string): boolean {
     const before = this.memoryDb.devices.length;
-    this.memoryDb.devices = this.memoryDb.devices.filter(d => d.id !== id);
+    this.memoryDb.devices = this.memoryDb.devices.filter(d => !(d.id === id && d.organizationId === orgId));
     if (this.memoryDb.devices.length !== before) {
+      // Also revoke credentials
+      this.revokeDeviceCredential(id, orgId);
       this.save();
       return true;
     }
     return false;
   }
 
-  // --- CAMPAIGNS ---
-  public getCampaigns(orgId?: string): Campaign[] {
-    return this.memoryDb.campaigns.filter(c => !orgId || c.organizationId === orgId);
+  // --- DEVICE CREDENTIALS ---
+  public getDeviceCredential(deviceId: string): DeviceCredentialRecord | undefined {
+    return this.memoryDb.deviceCredentials.find(c => c.deviceId === deviceId && !c.revoked);
   }
 
-  public getCampaignById(id: string): Campaign | undefined {
-    return this.memoryDb.campaigns.find(c => c.id === id);
-  }
-
-  public saveCampaign(campaign: Campaign): void {
-    const idx = this.memoryDb.campaigns.findIndex(c => c.id === campaign.id);
+  public saveDeviceCredential(cred: DeviceCredentialRecord): void {
+    const idx = this.memoryDb.deviceCredentials.findIndex(c => c.deviceId === cred.deviceId);
     if (idx >= 0) {
-      this.memoryDb.campaigns[idx] = campaign;
+      this.memoryDb.deviceCredentials[idx] = cred;
     } else {
-      this.memoryDb.campaigns.unshift(campaign);
+      this.memoryDb.deviceCredentials.unshift(cred);
     }
     this.save();
   }
 
-  public deleteCampaign(id: string): boolean {
+  public revokeDeviceCredential(deviceId: string, orgId: string): boolean {
+    const cred = this.memoryDb.deviceCredentials.find(c => c.deviceId === deviceId && c.organizationId === orgId);
+    if (cred) {
+      cred.revoked = true;
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  // --- ANTI-REPLAY ENGINE ---
+  public checkAndRecordReplay(eventId: string, nonce: string, timestampMs: number): { valid: boolean; reason?: string } {
+    const now = Date.now();
+    const maxSkewMs = 5 * 60 * 1000; // 5 minute max skew
+
+    if (Math.abs(now - timestampMs) > maxSkewMs) {
+      return { valid: false, reason: 'Timestamp outside acceptable window (clock skew > 5m)' };
+    }
+
+    // Check if eventId or nonce has been seen
+    const seenEvent = this.memoryDb.replayLogs.some(r => r.eventId === eventId);
+    if (seenEvent) {
+      return { valid: false, reason: 'Event ID already processed (replay detected)' };
+    }
+
+    const seenNonce = this.memoryDb.replayLogs.some(r => r.nonce === nonce);
+    if (seenNonce) {
+      return { valid: false, reason: 'Nonce already used (replay detected)' };
+    }
+
+    // Prune entries older than 30 minutes
+    const cutoff = now - 30 * 60 * 1000;
+    this.memoryDb.replayLogs = this.memoryDb.replayLogs.filter(r => r.timestamp > cutoff);
+
+    this.memoryDb.replayLogs.push({ eventId, nonce, timestamp: timestampMs });
+    this.save();
+    return { valid: true };
+  }
+
+  // --- WEBHOOK DEDUPLICATION ---
+  public recordWebhook(record: WebhookRecord): boolean {
+    const exists = this.memoryDb.webhooks.some(w => w.eventId === record.eventId);
+    if (exists) return false;
+    this.memoryDb.webhooks.unshift(record);
+    if (this.memoryDb.webhooks.length > 2000) {
+      this.memoryDb.webhooks.length = 2000;
+    }
+    this.save();
+    return true;
+  }
+
+  // --- CAMPAIGNS (STRICT MULTI-TENANT ISOLATION) ---
+  public getCampaigns(orgId: string): Campaign[] {
+    return this.memoryDb.campaigns.filter(c => c.organizationId === orgId);
+  }
+
+  public getCampaignById(id: string, orgId: string): Campaign | undefined {
+    return this.memoryDb.campaigns.find(c => c.id === id && c.organizationId === orgId);
+  }
+
+  public saveCampaign(campaign: Campaign, orgId: string): Campaign | null {
+    const existingOther = this.memoryDb.campaigns.find(c => c.id === campaign.id && c.organizationId !== orgId);
+    if (existingOther) {
+      return null;
+    }
+
+    const campaignWithOrg = { ...campaign, organizationId: orgId };
+    const idx = this.memoryDb.campaigns.findIndex(c => c.id === campaign.id && c.organizationId === orgId);
+    if (idx >= 0) {
+      this.memoryDb.campaigns[idx] = campaignWithOrg;
+    } else {
+      this.memoryDb.campaigns.unshift(campaignWithOrg);
+    }
+    this.save();
+    return campaignWithOrg;
+  }
+
+  public deleteCampaign(id: string, orgId: string): boolean {
     const before = this.memoryDb.campaigns.length;
-    this.memoryDb.campaigns = this.memoryDb.campaigns.filter(c => c.id !== id);
+    this.memoryDb.campaigns = this.memoryDb.campaigns.filter(c => !(c.id === id && c.organizationId === orgId));
     if (this.memoryDb.campaigns.length !== before) {
       this.save();
       return true;
@@ -724,24 +900,35 @@ export class VeloStorage {
     return false;
   }
 
-  // --- GEOFENCES ---
-  public getGeoFences(orgId?: string): GeoFence[] {
-    return this.memoryDb.geofences.filter(g => !orgId || g.organizationId === orgId);
+  // --- GEOFENCES (STRICT MULTI-TENANT ISOLATION) ---
+  public getGeoFences(orgId: string): GeoFence[] {
+    return this.memoryDb.geofences.filter(g => g.organizationId === orgId);
   }
 
-  public saveGeoFence(geofence: GeoFence): void {
-    const idx = this.memoryDb.geofences.findIndex(g => g.id === geofence.id);
+  public getGeoFenceById(id: string, orgId: string): GeoFence | undefined {
+    return this.memoryDb.geofences.find(g => g.id === id && g.organizationId === orgId);
+  }
+
+  public saveGeoFence(geofence: GeoFence, orgId: string): GeoFence | null {
+    const existingOther = this.memoryDb.geofences.find(g => g.id === geofence.id && g.organizationId !== orgId);
+    if (existingOther) {
+      return null;
+    }
+
+    const gfWithOrg = { ...geofence, organizationId: orgId };
+    const idx = this.memoryDb.geofences.findIndex(g => g.id === geofence.id && g.organizationId === orgId);
     if (idx >= 0) {
-      this.memoryDb.geofences[idx] = geofence;
+      this.memoryDb.geofences[idx] = gfWithOrg;
     } else {
-      this.memoryDb.geofences.unshift(geofence);
+      this.memoryDb.geofences.unshift(gfWithOrg);
     }
     this.save();
+    return gfWithOrg;
   }
 
-  public deleteGeoFence(id: string): boolean {
+  public deleteGeoFence(id: string, orgId: string): boolean {
     const before = this.memoryDb.geofences.length;
-    this.memoryDb.geofences = this.memoryDb.geofences.filter(g => g.id !== id);
+    this.memoryDb.geofences = this.memoryDb.geofences.filter(g => !(g.id === id && g.organizationId === orgId));
     if (this.memoryDb.geofences.length !== before) {
       this.save();
       return true;
@@ -749,24 +936,35 @@ export class VeloStorage {
     return false;
   }
 
-  // --- ADVERTISERS ---
-  public getAdvertisers(orgId?: string): AdvertiserAccount[] {
-    return this.memoryDb.advertisers.filter(a => !orgId || a.organizationId === orgId);
+  // --- ADVERTISERS (STRICT MULTI-TENANT ISOLATION) ---
+  public getAdvertisers(orgId: string): AdvertiserAccount[] {
+    return this.memoryDb.advertisers.filter(a => a.organizationId === orgId);
   }
 
-  public saveAdvertiser(adv: AdvertiserAccount): void {
-    const idx = this.memoryDb.advertisers.findIndex(a => a.id === adv.id);
+  public getAdvertiserById(id: string, orgId: string): AdvertiserAccount | undefined {
+    return this.memoryDb.advertisers.find(a => a.id === id && a.organizationId === orgId);
+  }
+
+  public saveAdvertiser(adv: AdvertiserAccount, orgId: string): AdvertiserAccount | null {
+    const existingOther = this.memoryDb.advertisers.find(a => a.id === adv.id && a.organizationId !== orgId);
+    if (existingOther) {
+      return null;
+    }
+
+    const advWithOrg = { ...adv, organizationId: orgId };
+    const idx = this.memoryDb.advertisers.findIndex(a => a.id === adv.id && a.organizationId === orgId);
     if (idx >= 0) {
-      this.memoryDb.advertisers[idx] = adv;
+      this.memoryDb.advertisers[idx] = advWithOrg;
     } else {
-      this.memoryDb.advertisers.unshift(adv);
+      this.memoryDb.advertisers.unshift(advWithOrg);
     }
     this.save();
+    return advWithOrg;
   }
 
-  public deleteAdvertiser(id: string): boolean {
+  public deleteAdvertiser(id: string, orgId: string): boolean {
     const before = this.memoryDb.advertisers.length;
-    this.memoryDb.advertisers = this.memoryDb.advertisers.filter(a => a.id !== id);
+    this.memoryDb.advertisers = this.memoryDb.advertisers.filter(a => !(a.id === id && a.organizationId === orgId));
     if (this.memoryDb.advertisers.length !== before) {
       this.save();
       return true;
@@ -774,42 +972,59 @@ export class VeloStorage {
     return false;
   }
 
-  // --- INVOICES ---
-  public getInvoices(orgId?: string): SaaSInvoice[] {
-    return this.memoryDb.invoices.filter(i => !orgId || i.organizationId === orgId);
+  // --- INVOICES (STRICT MULTI-TENANT ISOLATION) ---
+  public getInvoices(orgId: string): SaaSInvoice[] {
+    return this.memoryDb.invoices.filter(i => i.organizationId === orgId);
   }
 
-  public saveInvoice(invoice: SaaSInvoice): void {
-    const idx = this.memoryDb.invoices.findIndex(i => i.id === invoice.id);
+  public getInvoiceById(id: string, orgId: string): SaaSInvoice | undefined {
+    return this.memoryDb.invoices.find(i => i.id === id && i.organizationId === orgId);
+  }
+
+  public saveInvoice(invoice: SaaSInvoice, orgId: string): SaaSInvoice | null {
+    const existingOther = this.memoryDb.invoices.find(i => i.id === invoice.id && i.organizationId !== orgId);
+    if (existingOther) {
+      return null;
+    }
+
+    const invWithOrg = { ...invoice, organizationId: orgId };
+    const idx = this.memoryDb.invoices.findIndex(i => i.id === invoice.id && i.organizationId === orgId);
     if (idx >= 0) {
-      this.memoryDb.invoices[idx] = invoice;
+      this.memoryDb.invoices[idx] = invWithOrg;
     } else {
-      this.memoryDb.invoices.unshift(invoice);
+      this.memoryDb.invoices.unshift(invWithOrg);
     }
     this.save();
+    return invWithOrg;
   }
 
-  // --- PROOF OF PLAY LOGS ---
-  public getProofOfPlayLogs(orgId?: string, limit: number = 100): ProofOfPlayLog[] {
+  // --- PROOF OF PLAY LOGS (STRICT MULTI-TENANT ISOLATION) ---
+  public getProofOfPlayLogs(orgId: string, limit: number = 100): ProofOfPlayLog[] {
     return this.memoryDb.proofOfPlayLogs
-      .filter(l => !orgId || l.organizationId === orgId)
+      .filter(l => l.organizationId === orgId)
       .slice(0, limit);
   }
 
-  public recordProofOfPlay(log: ProofOfPlayLog): boolean {
+  public recordProofOfPlay(log: ProofOfPlayLog, orgId: string): boolean {
+    if (log.organizationId && log.organizationId !== orgId) {
+      return false;
+    }
+
     // Check duplicate by eventId
     if (this.memoryDb.proofOfPlayLogs.some(l => l.id === log.id)) {
       return false; // Idempotent discard
     }
 
-    this.memoryDb.proofOfPlayLogs.unshift(log);
+    const logWithOrg = { ...log, organizationId: orgId };
+    this.memoryDb.proofOfPlayLogs.unshift(logWithOrg);
+
     // Cap memory list at 10,000 logs
     if (this.memoryDb.proofOfPlayLogs.length > 10000) {
       this.memoryDb.proofOfPlayLogs.length = 10000;
     }
 
     // Update campaign counters in storage
-    const campaign = this.memoryDb.campaigns.find(c => c.id === log.campaignId);
+    const campaign = this.memoryDb.campaigns.find(c => c.id === log.campaignId && c.organizationId === orgId);
     if (campaign) {
       campaign.totalImpressions += 1;
       if (log.interacted) campaign.totalInteractions += 1;
@@ -818,7 +1033,7 @@ export class VeloStorage {
     }
 
     // Update device counters
-    const device = this.memoryDb.devices.find(d => d.id === log.deviceId);
+    const device = this.memoryDb.devices.find(d => d.id === log.deviceId && d.organizationId === orgId);
     if (device) {
       device.totalImpressionsToday += 1;
       if (log.interacted) device.totalInteractionsToday += 1;
@@ -826,7 +1041,7 @@ export class VeloStorage {
 
     // Driver revenue split (45% BYOD, 20% comodato)
     if (campaign && device && device.driverId) {
-      const driver = this.memoryDb.drivers.find(d => d.id === device.driverId);
+      const driver = this.memoryDb.drivers.find(d => d.id === device.driverId && d.organizationId === orgId);
       if (driver) {
         const grossValue = (campaign.cpm / 1000);
         const splitPct = device.hardwareOwnership === 'driver_byod' ? 0.45 : 0.20;
@@ -865,23 +1080,27 @@ export class VeloStorage {
     this.save();
   }
 
-  public getPendingCommands(deviceId: string): RemoteCommandRecord[] {
-    return this.memoryDb.remoteCommands.filter(c => c.deviceId === deviceId && c.status === 'PENDING');
+  public getPendingCommands(deviceId: string, orgId?: string): RemoteCommandRecord[] {
+    return this.memoryDb.remoteCommands.filter(
+      c => c.deviceId === deviceId && (!orgId || c.organizationId === orgId) && c.status === 'PENDING'
+    );
   }
 
-  public acknowledgeCommand(commandId: string): void {
-    const cmd = this.memoryDb.remoteCommands.find(c => c.id === commandId);
+  public acknowledgeCommand(commandId: string, orgId?: string): boolean {
+    const cmd = this.memoryDb.remoteCommands.find(c => c.id === commandId && (!orgId || c.organizationId === orgId));
     if (cmd) {
       cmd.status = 'ACKNOWLEDGED';
       cmd.acknowledgedAt = new Date().toISOString();
       this.save();
+      return true;
     }
+    return false;
   }
 
   // --- AUDIT LOGS ---
   public logAudit(log: Omit<AuditLog, 'id' | 'createdAt'>): void {
     const record: AuditLog = {
-      id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: `audit_${Date.now()}_${fs.randomBytes(4).toString('hex')}`,
       createdAt: new Date().toISOString(),
       ...log,
     };
@@ -892,9 +1111,9 @@ export class VeloStorage {
     this.save();
   }
 
-  public getAuditLogs(orgId?: string, limit: number = 100): AuditLog[] {
+  public getAuditLogs(orgId: string, limit: number = 100): AuditLog[] {
     return this.memoryDb.auditLogs
-      .filter(a => !orgId || a.organizationId === orgId)
+      .filter(a => a.organizationId === orgId)
       .slice(0, limit);
   }
 }
