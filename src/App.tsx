@@ -33,6 +33,7 @@ import {
   INITIAL_ADVERTISER_ACCOUNTS
 } from './data/mockData';
 import { INITIAL_PROOF_OF_PLAY } from './services/telemetryEngine';
+import { apiClient } from './services/apiClient';
 
 export default function App() {
   // Read initial tab and kiosk mode from URL (e.g. ?tab=player or ?kiosk=true or ?device=TV-SP-8491)
@@ -88,16 +89,65 @@ export default function App() {
 
   const currentOrg = organizations.find(o => o.id === currentOrgId) || organizations[0];
 
+  // Bootstrap live data from backend API
+  useEffect(() => {
+    let isMounted = true;
+    async function loadApiData() {
+      try {
+        const [orgsRes, devsRes, campsRes, drvsRes, gfsRes, popsRes, advsRes] = await Promise.allSettled([
+          apiClient.getOrganizations(),
+          apiClient.getDevices(),
+          apiClient.getCampaigns(),
+          apiClient.getDrivers(),
+          apiClient.getGeoFences(),
+          apiClient.getProofOfPlayLogs(50),
+          apiClient.getAdvertisers(),
+        ]);
+
+        if (!isMounted) return;
+
+        if (orgsRes.status === 'fulfilled' && orgsRes.value.length > 0) {
+          setOrganizations(orgsRes.value);
+        }
+        if (devsRes.status === 'fulfilled' && devsRes.value.length > 0) {
+          setDevices(devsRes.value);
+        }
+        if (campsRes.status === 'fulfilled' && campsRes.value.length > 0) {
+          setCampaigns(campsRes.value);
+        }
+        if (drvsRes.status === 'fulfilled' && drvsRes.value.length > 0) {
+          setDrivers(drvsRes.value);
+        }
+        if (gfsRes.status === 'fulfilled' && gfsRes.value.length > 0) {
+          setGeoFences(gfsRes.value);
+        }
+        if (popsRes.status === 'fulfilled' && popsRes.value.length > 0) {
+          setProofOfPlayLogs(popsRes.value);
+        }
+        if (advsRes.status === 'fulfilled' && advsRes.value.length > 0) {
+          setAdvertisers(advsRes.value);
+        }
+      } catch (err) {
+        console.info('[VeloMedia] Initializing with default seed state:', err);
+      }
+    }
+    loadApiData();
+    return () => { isMounted = false; };
+  }, []);
+
   const handleUpdateOrg = (updatedOrg: SaaSOrganization) => {
     setOrganizations(organizations.map(o => o.id === updatedOrg.id ? updatedOrg : o));
+    apiClient.updateOrganization(updatedOrg).catch(console.error);
   };
 
   const handleCreateOrg = (newOrg: SaaSOrganization) => {
     setOrganizations([newOrg, ...organizations]);
+    apiClient.saveOrganization(newOrg).catch(console.error);
   };
 
   const handleDeleteOrg = (orgId: string) => {
     setOrganizations(organizations.filter(o => o.id !== orgId));
+    apiClient.deleteOrganization(orgId).catch(console.error);
   };
 
   const handleSwitchOrg = (orgId: string) => {
@@ -107,32 +157,39 @@ export default function App() {
   // Drivers CRUD
   const handleSaveDriver = (newDriver: Driver) => {
     setDrivers([newDriver, ...drivers]);
+    apiClient.saveDriver(newDriver).catch(console.error);
   };
 
   const handleUpdateDriver = (updatedDriver: Driver) => {
     setDrivers(drivers.map(d => d.id === updatedDriver.id ? updatedDriver : d));
+    apiClient.updateDriver(updatedDriver).catch(console.error);
   };
 
   const handleDeleteDriver = (driverId: string) => {
     setDrivers(drivers.filter(d => d.id !== driverId));
+    apiClient.deleteDriver(driverId).catch(console.error);
   };
 
   // Devices CRUD
   const handleSaveDevice = (newDev: Device) => {
     setDevices([newDev, ...devices]);
+    apiClient.saveDevice(newDev).catch(console.error);
   };
 
   const handleDeleteDevice = (deviceId: string) => {
     setDevices(devices.filter(d => d.id !== deviceId));
+    apiClient.deleteDevice(deviceId).catch(console.error);
   };
 
   // Advertisers CRUD
   const handleSaveAdvertiser = (newAdv: AdvertiserAccount) => {
     setAdvertisers([newAdv, ...advertisers]);
+    apiClient.saveAdvertiser(newAdv).catch(console.error);
   };
 
   const handleUpdateAdvertiser = (updatedAdv: AdvertiserAccount) => {
     setAdvertisers(advertisers.map(a => a.id === updatedAdv.id ? updatedAdv : a));
+    apiClient.saveAdvertiser(updatedAdv).catch(console.error);
   };
 
   const handleDeleteAdvertiser = (advId: string) => {
@@ -155,14 +212,17 @@ export default function App() {
   // GeoFence handlers
   const handleAddGeoFence = (newFence: GeoFence) => {
     setGeoFences([newFence, ...geoFences]);
+    apiClient.saveGeoFence(newFence).catch(console.error);
   };
 
   const handleUpdateGeoFence = (updatedFence: GeoFence) => {
     setGeoFences(geoFences.map(f => f.id === updatedFence.id ? updatedFence : f));
+    apiClient.updateGeoFence(updatedFence).catch(console.error);
   };
 
   const handleDeleteGeoFence = (fenceId: string) => {
     setGeoFences(geoFences.filter(f => f.id !== fenceId));
+    apiClient.deleteGeoFence(fenceId).catch(console.error);
   };
 
   // Active player device selection
@@ -224,6 +284,7 @@ export default function App() {
   // Handler to record a Proof-of-Play (PoP) audit log from a TV
   const handleRecordProofOfPlay = (log: ProofOfPlayLog) => {
     setProofOfPlayLogs((prev) => [log, ...prev.slice(0, 49)]); // Keep last 50 logs
+    apiClient.recordProofOfPlay(log).catch(console.error);
 
     // Update campaign counters
     setCampaigns((prev) =>
@@ -258,6 +319,7 @@ export default function App() {
 
   // Remote command handler
   const handleSendRemoteCommand = (deviceId: string, command: string) => {
+    apiClient.sendRemoteCommand(deviceId, command).catch(console.error);
     setDevices((prev) =>
       prev.map((d) => {
         if (d.id === deviceId) {
@@ -326,27 +388,31 @@ export default function App() {
         return c;
       })
     );
+    apiClient.toggleCampaignStatus(campaignId).catch(console.error);
   };
 
   // Save new campaign
   const handleSaveCampaign = (newCmp: Campaign) => {
     setCampaigns([newCmp, ...campaigns]);
+    apiClient.saveCampaign(newCmp).catch(console.error);
   };
 
   // Save new device
   const handleSaveNewDevice = (newDev: Device) => {
     setDevices([newDev, ...devices]);
+    apiClient.saveDevice(newDev).catch(console.error);
   };
 
   // Update existing device settings
   const handleUpdateDevice = (updated: Device) => {
     setDevices((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
     setSelectedDeviceForDetail(updated);
+    apiClient.updateDevice(updated).catch(console.error);
   };
 
   // Driver PIX payment
   const handlePayDriverPix = (driverId: string) => {
-    // Marked as paid in DriversManager
+    apiClient.payoutDriverPix(driverId).catch(console.error);
   };
 
   const activeDeviceForPlayer = devices.find((d) => d.id === activePlayerDeviceId) || devices[0];

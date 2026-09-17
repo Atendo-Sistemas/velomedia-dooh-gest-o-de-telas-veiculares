@@ -1,5 +1,5 @@
 export type DeviceStatus = 'online' | 'standby' | 'offline' | 'maintenance';
-export type ScreenPosition = 'headrest_left' | 'headrest_right' | 'center_console' | 'dashboard';
+export type ScreenPosition = 'headrest_left' | 'headrest_right' | 'center_console' | 'dashboard' | 'front_dash';
 export type CreativeType = 'video' | 'interactive_banner' | 'qr_coupon' | 'mini_survey';
 export type CampaignCategory = 'food_beverage' | 'tech_finance' | 'retail' | 'automotive' | 'entertainment' | 'health';
 export type SaaSPlanTier = 'starter' | 'pro_fleet' | 'enterprise_network';
@@ -19,6 +19,7 @@ export interface SaaSOrganization {
   id: string;
   name: string;
   slug: string;
+  subdomain?: string;
   cnpj: string;
   city: string;
   state: string;
@@ -57,13 +58,18 @@ export interface SaaSOrganization {
 export interface SaaSInvoice {
   id: string;
   invoiceNumber: string;
+  organizationId?: string;
+  organizationName?: string;
+  month?: string;
   issueDate: string;
   dueDate: string;
   amount: number;
   status: 'paid' | 'pending' | 'overdue';
   screensBilled: number;
+  devicesBilled?: number;
   paymentMethod: 'pix' | 'credit_card' | 'bank_slip';
   pixQrCodeUrl?: string;
+  pixQrCode?: string;
   pdfDownloadUrl?: string;
 }
 
@@ -108,10 +114,14 @@ export interface GeoLocation {
   address?: string;
   neighborhood: string;
   city: string;
+  state?: string;
+  speedKmH?: number;
+  heading?: number;
 }
 
 export interface GeoFence {
   id: string;
+  organizationId?: string;
   name: string;
   city: string;
   center: { lat: number; lng: number };
@@ -131,11 +141,13 @@ export interface DeviceTelemetry {
   totalStorageGb: number;
   currentFps: number;
   brightness: number; // 0-100
+  screenBrightnessPct?: number;
   volume: number; // 0-100
   appVersion: string;
   lastHeartbeat: string;
   kioskLocked: boolean;
   screenUptimeTodayHours: number;
+  uptimeHours?: number;
 }
 
 export type DeviceHardwareOwnership = 'company_owned' | 'driver_byod';
@@ -158,6 +170,7 @@ export interface DriverReferral {
 
 export interface Driver {
   id: string;
+  organizationId?: string;
   name: string;
   avatar: string;
   phone: string;
@@ -167,7 +180,10 @@ export interface Driver {
   carColor: string;
   serviceType: 'Uber Black' | 'Uber Comfort' | 'UberX' | 'Taxi Especial' | '99 Pop';
   pixKey: string;
+  pixKeyType?: string;
   totalRidesMonth: number;
+  totalEarningsMonth?: number;
+  pendingBalance?: number;
   screenUptimeRating: number; // 0-100%
   monthlyEarnings: number;
   referralCode: string; // e.g. "CARLOS-VELO"
@@ -212,6 +228,7 @@ export interface DeviceHardwareSpecs {
 
 export interface Device {
   id: string;
+  organizationId?: string;
   code: string; // e.g. "TV-SP-0192"
   serialNumber: string;
   model: string; // e.g. "VeloTab 10.1 IPS Kiosk Pro"
@@ -260,6 +277,8 @@ export interface CampaignSchedule {
 
 export interface Campaign {
   id: string;
+  organizationId?: string;
+  title?: string;
   name: string;
   advertiser: string;
   logo: string;
@@ -280,16 +299,21 @@ export interface Campaign {
 
 export interface ProofOfPlayLog {
   id: string;
+  organizationId?: string;
   timestamp: string;
   deviceId: string;
   campaignId: string;
+  creativeId?: string;
   campaignName: string;
   advertiser: string;
   durationWatchedSec: number;
+  durationSeconds?: number;
   location: GeoLocation;
   interacted: boolean;
   interactionType?: 'qr_scan' | 'card_tap' | 'info_modal' | 'like';
   verifiedHash: string;
+  signature?: string;
+  nonce?: string;
   syncedOnline: boolean;
 }
 
@@ -335,7 +359,18 @@ export interface AdvertiserBillingRecord {
   receiptNumber: string;
 }
 
-export type SaaSUserRole = 'super_admin' | 'fleet_manager' | 'financial_auditor' | 'ad_reviewer' | 'support_tech';
+export type SaaSUserRole = 
+  | 'super_admin' 
+  | 'platform_admin' 
+  | 'organization_admin' 
+  | 'fleet_manager' 
+  | 'operator' 
+  | 'financial_auditor' 
+  | 'ad_reviewer' 
+  | 'support_tech' 
+  | 'driver' 
+  | 'advertiser' 
+  | 'viewer';
 
 export interface SaaSUser {
   id: string;
@@ -354,7 +389,9 @@ export interface SaaSUser {
 
 export interface AdvertiserAccount {
   id: string;
+  organizationId?: string;
   companyName: string;
+  name?: string;
   tradeName: string; // Nome Fantasia
   cnpj: string;
   category: CampaignCategory;
@@ -367,6 +404,7 @@ export interface AdvertiserAccount {
   paymentTerms: 'prepaid' | 'postpaid_30d' | 'monthly_retainer';
   creditLimit: number;
   currentBalance: number;
+  balance?: number;
   status: 'active' | 'pending_verification' | 'blocked';
   activeCampaignsCount: number;
   totalSpent: number;

@@ -16,11 +16,54 @@ import {
   Lock, 
   RefreshCw,
   TrendingUp,
-  Award
+  Award,
+  X
 } from 'lucide-react';
 
 export const ArchitectureDoc: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'iot_comm' | 'offline_edge' | 'kiosk_security' | 'future_innovations'>('iot_comm');
+  const [activeTab, setActiveTab] = useState<'iot_comm' | 'offline_edge' | 'kiosk_security' | 'future_innovations' | 'live_execution'>('live_execution');
+  
+  // Interactive PoP Auditor State
+  const [testEventId, setTestEventId] = useState('pop_live_sample_01');
+  const [testDeviceId, setTestDeviceId] = useState('dev_01');
+  const [testCampaignId, setTestCampaignId] = useState('camp_01');
+  const [testSignature, setTestSignature] = useState('');
+  const [auditResult, setAuditResult] = useState<{ checked: boolean; valid?: boolean; message?: string } | null>(null);
+  const [isAuditing, setIsAuditing] = useState(false);
+
+  const handleRunPoPAudit = async () => {
+    setIsAuditing(true);
+    try {
+      // If signature is empty, generate test hash
+      const sigToTest = testSignature || '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b';
+      const res = await fetch('/api/v1/proof-of-play/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventId: testEventId,
+          deviceId: testDeviceId,
+          campaignId: testCampaignId,
+          startedAt: '2026-09-17T12:00:00Z',
+          endedAt: '2026-09-17T12:00:15Z',
+          durationMs: 15000,
+          nonce: `nonce_${testEventId}`,
+          signature: sigToTest,
+        }),
+      });
+      const data = await res.json();
+      setAuditResult({
+        checked: true,
+        valid: data.verified,
+        message: data.verified 
+          ? 'Assinatura HMAC-SHA256 íntegra e confirmada pelo servidor!' 
+          : 'Falha na verificação: assinatura não corresponde ao segredo e aos parâmetros.',
+      });
+    } catch (err: any) {
+      setAuditResult({ checked: true, valid: false, message: `Erro na auditoria: ${err.message}` });
+    } finally {
+      setIsAuditing(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -33,10 +76,10 @@ export const ArchitectureDoc: React.FC = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight">
-              Guia de Arquitetura Técnica & Otimização Edge/IoT
+              Arquitetura de Produção & Execução do Sistema VeloMedia DOOH
             </h1>
             <p className="text-sm text-slate-400 mt-1">
-              Melhores práticas para comunicação ultra-leve entre a nuvem e os monitores veiculares, resiliência offline e oportunidades de monetização.
+              Backend Express + API REST v1 unificada, persistência estruturada em disco/banco, Proof-of-Play criptográfico HMAC-SHA256 e resiliência offline.
             </p>
           </div>
         </div>
@@ -45,6 +88,7 @@ export const ArchitectureDoc: React.FC = () => {
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-2">
         {[
+          { id: 'live_execution', label: '★ Execução em Produção & Auditor PoP', icon: Server },
           { id: 'iot_comm', label: '1. Otimização Nuvem ↔ TV (IoT)', icon: Zap },
           { id: 'offline_edge', label: '2. Arquitetura Offline-First & Edge', icon: HardDrive },
           { id: 'kiosk_security', label: '3. Modo Kiosk & Proteção do Hardware', icon: ShieldCheck },
@@ -68,6 +112,185 @@ export const ArchitectureDoc: React.FC = () => {
           );
         })}
       </div>
+
+      {/* TAB: LIVE EXECUTION */}
+      {activeTab === 'live_execution' && (
+        <div className="space-y-6">
+          
+          {/* Production Status Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-slate-900/90 border border-emerald-500/30 p-4 rounded-2xl">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Servidor Node.js + Express</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              </div>
+              <p className="text-lg font-black text-emerald-400 mt-2">API v1 Operacional</p>
+              <p className="text-[11px] text-slate-400 mt-1 font-mono">Porta 3000 • Ingress Cloud Run</p>
+            </div>
+
+            <div className="bg-slate-900/90 border border-cyan-500/30 p-4 rounded-2xl">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Algoritmo de Auditoria PoP</span>
+                <Lock className="w-4 h-4 text-cyan-400" />
+              </div>
+              <p className="text-lg font-black text-cyan-400 mt-2">HMAC-SHA256</p>
+              <p className="text-[11px] text-slate-400 mt-1">Anti-replay • Chave Secreta/Dispositivo</p>
+            </div>
+
+            <div className="bg-slate-900/90 border border-indigo-500/30 p-4 rounded-2xl">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Isolamento Multi-Tenant</span>
+                <ShieldCheck className="w-4 h-4 text-indigo-400" />
+              </div>
+              <p className="text-lg font-black text-indigo-400 mt-2">Tenant Scoped</p>
+              <p className="text-[11px] text-slate-400 mt-1">RBAC Server-side • Sem vazamento</p>
+            </div>
+
+            <div className="bg-slate-900/90 border border-purple-500/30 p-4 rounded-2xl">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Armazenamento</span>
+                <HardDrive className="w-4 h-4 text-purple-400" />
+              </div>
+              <p className="text-lg font-black text-purple-400 mt-2">Persistente em Disco</p>
+              <p className="text-[11px] text-slate-400 mt-1 font-mono">/data/velomedia_store.json</p>
+            </div>
+          </div>
+
+          {/* Interactive PoP Auditor Section */}
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Auditor Interativo de Assinatura Criptográfica PoP</h3>
+                <p className="text-xs text-slate-400">
+                  Teste em tempo real o endpoint <code className="bg-slate-800 text-cyan-300 px-1 py-0.5 rounded">POST /api/v1/proof-of-play/verify</code> para auditar uma impressão veicular.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] text-slate-400 font-semibold block mb-1">ID do Evento de Exibição</label>
+                <input 
+                  type="text" 
+                  value={testEventId} 
+                  onChange={e => setTestEventId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 font-mono focus:border-cyan-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-400 font-semibold block mb-1">ID do Dispositivo (Tablet)</label>
+                <input 
+                  type="text" 
+                  value={testDeviceId} 
+                  onChange={e => setTestDeviceId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 font-mono focus:border-cyan-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-400 font-semibold block mb-1">ID da Campanha Publicitária</label>
+                <input 
+                  type="text" 
+                  value={testCampaignId} 
+                  onChange={e => setTestCampaignId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 font-mono focus:border-cyan-500 outline-none"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-slate-400 font-semibold block mb-1">Assinatura HMAC-SHA256 (Deixe em branco para testar hash de referência)</label>
+              <input 
+                type="text" 
+                value={testSignature} 
+                onChange={e => setTestSignature(e.target.value)}
+                placeholder="Ex: 8f3c7a... (hash hexadecimal de 64 caracteres)"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 font-mono focus:border-cyan-500 outline-none"
+              />
+            </div>
+
+            <div className="flex items-center space-x-3 pt-2">
+              <button
+                onClick={handleRunPoPAudit}
+                disabled={isAuditing}
+                className="px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold rounded-xl text-xs transition shadow-md flex items-center space-x-2"
+              >
+                {isAuditing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                <span>Verificar Assinatura no Servidor</span>
+              </button>
+
+              {auditResult && (
+                <div className={`px-3 py-2 rounded-xl text-xs flex items-center space-x-2 border ${
+                  auditResult.valid ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                }`}>
+                  {auditResult.valid ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <X className="w-4 h-4 text-rose-400" />}
+                  <span>{auditResult.message}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Endpoints Registry */}
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
+            <h3 className="text-base font-bold text-white">Catálogo de Endpoints da API REST v1 em Execução</h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono font-bold text-[10px]">POST</span>
+                  <span className="font-mono text-slate-200">/api/v1/auth/login</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Login com senha hash PBKDF2 e cookie seguro HttpOnly.</p>
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono font-bold text-[10px]">GET</span>
+                  <span className="font-mono text-slate-200">/api/v1/devices</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Listagem de monitores com isolamento por organização.</p>
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono font-bold text-[10px]">POST</span>
+                  <span className="font-mono text-slate-200">/api/v1/devices/pair-token</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Geração de código de pareamento de 6 dígitos com expiração de 15min.</p>
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono font-bold text-[10px]">POST</span>
+                  <span className="font-mono text-slate-200">/api/v1/proof-of-play/log</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Ingestão de impressões auditadas com assinatura HMAC.</p>
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 font-mono font-bold text-[10px]">POST</span>
+                  <span className="font-mono text-slate-200">/api/v1/billing/invoices/:id/generate-pix</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Emissão de QR Code PIX padrão EMV com chave do franqueado.</p>
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono font-bold text-[10px]">POST</span>
+                  <span className="font-mono text-slate-200">/api/v1/drivers/:id/payout</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Processamento de repasse e liquidação financeira do motorista.</p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      )}
 
       {/* Content Section 1: IoT Communication */}
       {activeTab === 'iot_comm' && (

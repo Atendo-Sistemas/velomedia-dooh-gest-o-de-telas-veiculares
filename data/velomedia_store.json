@@ -1,0 +1,329 @@
+{
+  "version": 1,
+  "organizations": [
+    {
+      "id": "org_sp_matriz",
+      "name": "VeloMedia São Paulo (Matriz Operadora)",
+      "subdomain": "sp.velomedia.com.br",
+      "planId": "plan_scale",
+      "status": "active",
+      "contactEmail": "admin@velomedia.com.br",
+      "contactPhone": "(11) 3100-8000",
+      "cnpj": "48.912.304/0001-92",
+      "activeDevicesCount": 142,
+      "maxDevicesLimit": 300,
+      "billingCycle": "monthly",
+      "monthlyFee": 5490,
+      "createdAt": "2025-01-15T10:00:00Z",
+      "adminUser": {
+        "name": "Carlos Albuquerque",
+        "email": "admin@velomedia.com.br",
+        "phone": "(11) 98123-4567"
+      }
+    },
+    {
+      "id": "org_rio_frota",
+      "name": "Carioca DOOH Mobilidade RJ",
+      "subdomain": "rio.velomedia.com.br",
+      "planId": "plan_pro",
+      "status": "active",
+      "contactEmail": "operacoes@cariocadooh.com.br",
+      "contactPhone": "(21) 2500-4000",
+      "cnpj": "39.812.901/0001-44",
+      "activeDevicesCount": 48,
+      "maxDevicesLimit": 100,
+      "billingCycle": "monthly",
+      "monthlyFee": 1990,
+      "createdAt": "2025-06-01T12:00:00Z",
+      "adminUser": {
+        "name": "Renata Lemos",
+        "email": "operacoes@cariocadooh.com.br",
+        "phone": "(21) 99876-5432"
+      }
+    }
+  ],
+  "users": [
+    {
+      "id": "user_master",
+      "name": "Administrador Velo Master",
+      "email": "admin@velomedia.com.br",
+      "role": "platform_admin",
+      "organizationId": "org_sp_matriz",
+      "status": "active",
+      "lastLogin": "2026-09-17T19:29:32.971Z",
+      "createdAt": "2025-01-15T10:00:00Z",
+      "passwordHash": "38b756c5bdd5ee4e6c7c48dcd9d6fd29:4a79cb7bf83e0f1ddd0d2670c81e26201ef90415bc024540a11d6742f33bdad2d8721ecd23d53c42eccefc26252a4e66a7789e18d0dd34aec15c27443573dc22"
+    },
+    {
+      "id": "user_sp_operator",
+      "name": "Lucas Ferreira",
+      "email": "operador@velomedia.com.br",
+      "role": "operator",
+      "organizationId": "org_sp_matriz",
+      "status": "active",
+      "lastLogin": "2026-09-17T19:29:32.972Z",
+      "createdAt": "2025-03-10T10:00:00Z",
+      "passwordHash": "38b756c5bdd5ee4e6c7c48dcd9d6fd29:4a79cb7bf83e0f1ddd0d2670c81e26201ef90415bc024540a11d6742f33bdad2d8721ecd23d53c42eccefc26252a4e66a7789e18d0dd34aec15c27443573dc22"
+    }
+  ],
+  "drivers": [
+    {
+      "id": "drv_01",
+      "name": "Marcos Vinicius Ribeiro",
+      "carPlate": "BRA-2E19",
+      "carModel": "Toyota Corolla Hybrid 2024 (Preto)",
+      "phone": "(11) 98765-4321",
+      "pixKey": "marcos.ribeiro.pix@banco.com.br",
+      "pixKeyType": "EMAIL",
+      "totalEarningsMonth": 1450.8,
+      "pendingBalance": 320.5,
+      "rating": 4.96,
+      "workingCity": "São Paulo",
+      "workingRegion": "Centro Expandido e Av. Paulista",
+      "workingCenter": {
+        "lat": -23.561684,
+        "lng": -46.655981
+      },
+      "workingRadiusKm": 15,
+      "workingPoles": [
+        "pole_sp_paulista",
+        "pole_sp_itaim"
+      ],
+      "organizationId": "org_sp_matriz"
+    },
+    {
+      "id": "drv_02",
+      "name": "Rodrigo Mendonça Santos",
+      "carPlate": "RIO-9F31",
+      "carModel": "BYD Dolphin EV 2024 (Branco)",
+      "phone": "(11) 97654-3210",
+      "pixKey": "11976543210",
+      "pixKeyType": "TELEFONE",
+      "totalEarningsMonth": 980.2,
+      "pendingBalance": 190,
+      "rating": 4.92,
+      "workingCity": "São Paulo",
+      "workingRegion": "Zona Sul / Berrini / Aeroporto CGH",
+      "workingCenter": {
+        "lat": -23.60005,
+        "lng": -46.6908
+      },
+      "workingRadiusKm": 20,
+      "workingPoles": [
+        "pole_sp_berrini",
+        "pole_sp_cgh"
+      ],
+      "organizationId": "org_sp_matriz"
+    }
+  ],
+  "devices": [
+    {
+      "id": "dev_01",
+      "code": "TV-SP-8491",
+      "serialNumber": "SAM-A9P-2025-0012",
+      "driverId": "drv_01",
+      "driverName": "Marcos Vinicius Ribeiro",
+      "carPlate": "BRA-2E19",
+      "status": "online",
+      "model": "Samsung Galaxy Tab A9+ 11\" 5G Homologado",
+      "screenPosition": "headrest_right",
+      "hardwareOwnership": "driver_byod",
+      "currentLocation": {
+        "lat": -23.561684,
+        "lng": -46.655981,
+        "speedKmH": 34.5,
+        "heading": 180,
+        "address": "Avenida Paulista, 1578 - Bela Vista",
+        "neighborhood": "Bela Vista",
+        "city": "São Paulo",
+        "state": "SP"
+      },
+      "telemetry": {
+        "batteryVoltage": 13.8,
+        "cpuTemp": 38.2,
+        "signalStrength": "5G",
+        "signalDbm": -68,
+        "storageFreeGb": 48.5,
+        "totalStorageGb": 64,
+        "appVersion": "2.4.0-prod",
+        "lastHeartbeat": "2026-09-17T19:29:32.972Z",
+        "uptimeHours": 8.5,
+        "screenBrightnessPct": 85
+      },
+      "hardwareSpecs": {
+        "brand": "Samsung",
+        "tabletModel": "Galaxy Tab A9+ 11\" 4G/5G",
+        "screenSizeInches": 11,
+        "resolution": "1920x1200 FHD+ WUXGA",
+        "panelType": "TFT LCD IPS Capacitivo Anti-Reflexo",
+        "brightnessNits": 570,
+        "aspectRatio": "16:10",
+        "orientation": "landscape",
+        "osVersion": "Android 14 OneUI 6.0 Kiosk Locked",
+        "macAddress": "74:D0:2B:9F:8A:12",
+        "imei": "864920058291048",
+        "simCarrier": "Claro Empresas M2M IoT",
+        "connectivity": "5G_M2M",
+        "mountType": "Suporte de Encosto em Alumínio c/ Trava Antifurto Allen",
+        "powerSupply": "12V Pós-Chave c/ Conversor Step-Down 5V/3A & Fusível",
+        "storageGb": 64,
+        "ramGb": 4,
+        "refreshRateHz": 90
+      },
+      "totalImpressionsToday": 248,
+      "totalInteractionsToday": 32,
+      "organizationId": "org_sp_matriz"
+    }
+  ],
+  "campaigns": [
+    {
+      "id": "camp_01",
+      "title": "Nubank Ultravioleta - Alta Renda",
+      "advertiser": "Nubank Brasil",
+      "status": "active",
+      "type": "video",
+      "mediaUrl": "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=1280&q=80",
+      "durationSeconds": 15,
+      "priority": 10,
+      "cpm": 65,
+      "budgetTotal": 25000,
+      "budgetSpent": 8450.5,
+      "totalImpressions": 130000,
+      "totalInteractions": 14200,
+      "totalScans": 3890,
+      "qrCodeUrl": "https://nubank.com.br/ultravioleta",
+      "targetGeoFences": [
+        "all"
+      ],
+      "schedule": {
+        "startDate": "2026-09-01",
+        "endDate": "2026-10-31",
+        "daysOfWeek": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          0
+        ],
+        "timeSlots": [
+          {
+            "startHour": 6,
+            "endHour": 23
+          }
+        ]
+      },
+      "organizationId": "org_sp_matriz"
+    },
+    {
+      "id": "camp_02",
+      "title": "Fasano Hotel & Gastronomia - Jardins",
+      "advertiser": "Grupo Fasano",
+      "status": "active",
+      "type": "interactive_banner",
+      "mediaUrl": "https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1280&q=80",
+      "durationSeconds": 10,
+      "priority": 9,
+      "cpm": 80,
+      "budgetTotal": 15000,
+      "budgetSpent": 5120,
+      "totalImpressions": 64000,
+      "totalInteractions": 8100,
+      "totalScans": 2350,
+      "qrCodeUrl": "https://fasano.com.br/reservas",
+      "targetGeoFences": [
+        "gf_sp_jardins"
+      ],
+      "schedule": {
+        "startDate": "2026-09-01",
+        "endDate": "2026-10-15",
+        "daysOfWeek": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          0
+        ],
+        "timeSlots": [
+          {
+            "startHour": 11,
+            "endHour": 23
+          }
+        ]
+      },
+      "organizationId": "org_sp_matriz"
+    }
+  ],
+  "geofences": [
+    {
+      "id": "gf_sp_paulista",
+      "name": "Av. Paulista & Jardins",
+      "center": {
+        "lat": -23.561684,
+        "lng": -46.655981
+      },
+      "radiusKm": 2.5,
+      "color": "#06b6d4",
+      "organizationId": "org_sp_matriz"
+    },
+    {
+      "id": "gf_sp_itaim_faria_lima",
+      "name": "Faria Lima & Itaim Bibi Corporate",
+      "center": {
+        "lat": -23.5855,
+        "lng": -46.6806
+      },
+      "radiusKm": 3,
+      "color": "#3b82f6",
+      "organizationId": "org_sp_matriz"
+    }
+  ],
+  "proofOfPlayLogs": [],
+  "advertisers": [
+    {
+      "id": "adv_nubank",
+      "name": "Nubank Brasil",
+      "companyName": "Nu Pagamentos S.A.",
+      "cnpj": "18.236.120/0001-58",
+      "email": "marketing@nubank.com.br",
+      "phone": "(11) 3003-8888",
+      "balance": 16549.5,
+      "totalSpent": 8450.5,
+      "activeCampaignsCount": 1,
+      "organizationId": "org_sp_matriz"
+    },
+    {
+      "id": "adv_fasano",
+      "name": "Grupo Fasano",
+      "companyName": "Hotelaria e Gastronomia Fasano Ltda",
+      "cnpj": "03.882.102/0001-30",
+      "email": "contato@fasano.com.br",
+      "phone": "(11) 3896-4000",
+      "balance": 9880,
+      "totalSpent": 5120,
+      "activeCampaignsCount": 1,
+      "organizationId": "org_sp_matriz"
+    }
+  ],
+  "invoices": [
+    {
+      "id": "inv_2026_09_01",
+      "organizationId": "org_sp_matriz",
+      "organizationName": "VeloMedia São Paulo",
+      "month": "Setembro / 2026",
+      "devicesBilled": 142,
+      "amount": 5490,
+      "dueDate": "2026-09-10",
+      "status": "paid",
+      "paidAt": "2026-09-05T14:32:00Z",
+      "pixQrCode": "00020126580014br.gov.bcb.pix0136velomedia-pix-key-sample52040000530398654075490.005802BR5918VELOMEDIA DOOH SA6009SAO PAULO62070503***6304ABCD"
+    }
+  ],
+  "auditLogs": [],
+  "pairingTokens": [],
+  "remoteCommands": [],
+  "sessions": []
+}
