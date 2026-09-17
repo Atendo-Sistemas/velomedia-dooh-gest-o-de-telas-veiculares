@@ -1,0 +1,42 @@
+{
+  "short_name": "VeloPlayer",
+  "name": "VeloMedia DOOH - Kiosk Screen Player",
+  "description": "PWA Exclusivo para Telas Veiculares e Tablets em Táxis e Carros de Aplicativo (BYOD / Kiosk)",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/?tab=player&kiosk=true&pwa=1",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "display_override": ["fullscreen", "standalone", "window-controls-overlay"],
+  "categories": ["business", "utilities", "media"],
+  "shortcuts": [
+    {
+      "name": "Player TV Kiosk",
+      "short_name": "Player TV",
+      "description": "Iniciar Player de Mídia em Tela Cheia",
+      "url": "/?tab=player&kiosk=true",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Parear Dispositivo",
+      "short_name": "Pareamento",
+      "description": "Conectar este Tablet à Frota",
+      "url": "/?tab=devices&action=pair",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

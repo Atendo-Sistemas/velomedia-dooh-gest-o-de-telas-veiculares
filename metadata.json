@@ -1,0 +1,6 @@
+{
+  "name": "VeloMedia DOOH - Gestão de Telas Veiculares",
+  "description": "Plataforma SaaS multi-tenant completa de gestão de telas interativas em táxis e carros de aplicativo (DOOH) com PWA exclusivo para tablets veiculares, painel do motorista parceiro (PIX & telemetria), portal do anunciante (PoP & faturamento), hub do passageiro (cupons & quiz) e painel SaaS Master.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
