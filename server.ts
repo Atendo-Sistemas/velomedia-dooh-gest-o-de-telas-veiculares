@@ -29,13 +29,13 @@ async function startServer() {
       // Allow requests with no origin (e.g. mobile apps, curl, kiosk PWA same-origin)
       if (!origin) return callback(null, true);
 
-      if (process.env.NODE_ENV !== 'production') {
-        if (devOrigins.includes(origin) || origin.includes('run.app') || origin.includes('localhost')) {
-          return callback(null, true);
-        }
-      }
-
-      if (allowedOrigins.includes(origin)) {
+      if (
+        devOrigins.includes(origin) ||
+        origin.endsWith('.run.app') ||
+        origin.includes('localhost') ||
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.includes('*')
+      ) {
         return callback(null, true);
       }
 

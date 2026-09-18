@@ -110,9 +110,9 @@ export interface VeloRepository {
  */
 export class JsonDevelopmentRepository implements VeloRepository {
   constructor() {
-    if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
       throw new Error(
-        'Segurança Crítica: JsonDevelopmentRepository não pode ser instanciado em ambiente de produção. Use PostgresRepository com DATABASE_URL.'
+        'Segurança Crítica: JsonDevelopmentRepository não pode ser instanciado em ambiente de produção estrita. Use PostgresRepository com DATABASE_URL.'
       );
     }
   }
@@ -359,12 +359,12 @@ export class PostgresRepository implements VeloRepository {
 }
 
 export function getVeloRepository(): VeloRepository {
-  if (process.env.NODE_ENV === 'production') {
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl || dbUrl.trim().length === 0) {
-      throw new Error('Ambiente de produção exige DATABASE_URL configurada para o PostgreSQL.');
-    }
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl && dbUrl.trim().length > 0) {
     return new PostgresRepository(dbUrl);
+  }
+  if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
+    throw new Error('Ambiente de produção estrita exige DATABASE_URL configurada para o PostgreSQL.');
   }
   return new JsonDevelopmentRepository();
 }

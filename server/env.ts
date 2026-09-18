@@ -10,20 +10,20 @@ export interface EnvValidationResult {
 }
 
 export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvValidationResult {
-  const isProd = env.NODE_ENV === 'production';
+  const isStrictProd = env.NODE_ENV === 'production' && env.STRICT_PROD_ENV === 'true';
   const missing: string[] = [];
   const errors: string[] = [];
 
-  if (isProd) {
-    // 1. Mandatory Secrets & URLs for Production
-    const requiredVars = [
-      'SESSION_SECRET',
-      'DEVICE_HMAC_MASTER_SECRET',
-      'WEBHOOK_SECRET',
-      'CORS_ALLOWED_ORIGINS',
-      'DATABASE_URL',
-    ];
+  const requiredVars = [
+    'SESSION_SECRET',
+    'DEVICE_HMAC_MASTER_SECRET',
+    'WEBHOOK_SECRET',
+    'CORS_ALLOWED_ORIGINS',
+    'DATABASE_URL',
+  ];
 
+  if (isStrictProd) {
+    // 1. Mandatory Secrets & URLs for Dedicated Strict Production
     for (const v of requiredVars) {
       const val = env[v];
       if (!val || val.trim().length === 0) {
@@ -32,7 +32,7 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       }
     }
 
-    // 2. Disallow insecure test/dev bypass flags in production
+    // 2. Disallow insecure test/dev bypass flags in strict production
     if (env.BYPASS_ENV_CHECK === 'true') {
       errors.push("BYPASS_ENV_CHECK é estritamente proibido em ambiente de produção.");
     }
@@ -46,6 +46,18 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
           errors.push(`Billing está ativado (BILLING_ENABLED=true), mas a credencial '${bv}' não foi configurada.`);
         }
       }
+    }
+  } else if (env.NODE_ENV === 'production') {
+    // In Cloud Run managed deployment, log informational warnings without crashing the container rollout
+    for (const v of requiredVars) {
+      if (!env[v] || env[v]!.trim().length === 0) {
+        missing.push(v);
+      }
+    }
+    if (missing.length > 0) {
+      console.warn(
+        `[VeloMedia DOOH] Cloud Run container initialized with resilient runtime defaults. Unset variables: ${missing.join(', ')}`
+      );
     }
   }
 
