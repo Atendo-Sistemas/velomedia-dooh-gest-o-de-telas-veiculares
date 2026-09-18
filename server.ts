@@ -5,31 +5,14 @@ import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/api';
 import { authMiddleware } from './server/auth';
+import { enforceProductionEnvironment } from './server/env';
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
 
-/**
- * Validate production environment variables before startup
- */
-function validateProductionEnvironment(): void {
-  if (process.env.NODE_ENV === 'production') {
-    const requiredVars = [
-      'SESSION_SECRET',
-      'DEVICE_HMAC_MASTER_SECRET',
-      'WEBHOOK_SECRET',
-      'CORS_ALLOWED_ORIGINS',
-    ];
-
-    const missing = requiredVars.filter(v => !process.env[v] || process.env[v]!.trim().length === 0);
-    if (missing.length > 0 && !process.env.BYPASS_ENV_CHECK) {
-      console.warn(`[SECURITY WARNING] Missing environment variables in production: ${missing.join(', ')}`);
-    }
-  }
-}
-
 async function startServer() {
-  validateProductionEnvironment();
+  // Fail-fast guard: ensures all critical production secrets and configurations are validated
+  enforceProductionEnvironment();
 
   const app = express();
 

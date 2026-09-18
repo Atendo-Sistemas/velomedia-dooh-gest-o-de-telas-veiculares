@@ -219,7 +219,7 @@ export const WebhookEventSchema = z.object({
   eventId: z.string().min(1),
   provider: z.string().min(1),
   status: z.enum(['pending', 'paid', 'expired', 'cancelled', 'refunded']),
-  payload: z.record(z.any()),
+  payload: z.record(z.string(), z.unknown()),
 });
 
 export function validateBody<T>(schema: z.ZodSchema<T>) {
@@ -229,7 +229,7 @@ export function validateBody<T>(schema: z.ZodSchema<T>) {
       res.status(400).json({
         error: 'validation_error',
         message: 'Dados de entrada inválidos.',
-        details: result.error.errors.map(e => ({
+        details: result.error.issues.map((e) => ({
           path: e.path.join('.'),
           message: e.message,
         })),

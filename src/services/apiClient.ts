@@ -172,6 +172,12 @@ export const apiClient = {
       body: JSON.stringify(geofence),
     });
   },
+  async updateGeoFence(geofence: GeoFence): Promise<GeoFence> {
+    return request<GeoFence>(`/geofences/${geofence.id}`, {
+      method: 'PUT',
+      body: JSON.stringify(geofence),
+    });
+  },
   async deleteGeoFence(id: string): Promise<{ success: boolean }> {
     return request<{ success: boolean }>(`/geofences/${id}`, { method: 'DELETE' });
   },
@@ -185,6 +191,9 @@ export const apiClient = {
       method: 'POST',
       body: JSON.stringify(log),
     });
+  },
+  async recordProofOfPlay(log: any): Promise<{ success: boolean; recorded: boolean; eventId: string }> {
+    return this.submitProofOfPlay(log);
   },
 
   // Advertisers & Billing

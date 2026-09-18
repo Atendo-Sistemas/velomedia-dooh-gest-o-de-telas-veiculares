@@ -1,4 +1,4 @@
-export type DeviceStatus = 'online' | 'standby' | 'offline' | 'maintenance';
+export type DeviceStatus = 'online' | 'standby' | 'offline' | 'maintenance' | 'retired';
 export type ScreenPosition = 'headrest_left' | 'headrest_right' | 'center_console' | 'dashboard' | 'front_dash';
 export type CreativeType = 'video' | 'interactive_banner' | 'qr_coupon' | 'mini_survey';
 export type CampaignCategory = 'food_beverage' | 'tech_finance' | 'retail' | 'automotive' | 'entertainment' | 'health';
@@ -71,6 +71,8 @@ export interface SaaSInvoice {
   pixQrCodeUrl?: string;
   pixQrCode?: string;
   pdfDownloadUrl?: string;
+  txid?: string;
+  paidAt?: string;
 }
 
 export interface AdvertiserClientPortal {
@@ -301,6 +303,8 @@ export interface ProofOfPlayLog {
   id: string;
   organizationId?: string;
   timestamp: string;
+  startedAt?: string;
+  endedAt?: string;
   deviceId: string;
   campaignId: string;
   creativeId?: string;

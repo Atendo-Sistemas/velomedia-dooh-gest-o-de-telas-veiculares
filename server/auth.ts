@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { storage } from './storage';
 import type { SessionRecord, DeviceCredentialRecord } from './storage';
-import type { SaaSUserRole } from '../src/types';
+import type { SaaSUserRole, DeviceStatus } from '../src/types';
 import { 
   verifyDeviceRequestSignature, 
   hashRequestBody 
@@ -20,6 +20,7 @@ export interface AuthenticatedDevice {
   organizationId: string;
   code: string;
   model: string;
+  status: DeviceStatus;
 }
 
 declare global {
@@ -85,6 +86,43 @@ export function recordFailedLogin(key: string): void {
 
 export function resetLoginRateLimit(key: string): void {
   loginAttempts.delete(key);
+}
+
+// Pairing Rate Limiting (Brute-force protection on 6-digit codes)
+const pairingAttempts = new Map<string, LoginAttempt>();
+
+export function checkPairingRateLimit(key: string): { allowed: boolean; retryAfterSec?: number } {
+  const now = Date.now();
+  const attempt = pairingAttempts.get(key);
+  if (!attempt) return { allowed: true };
+
+  if (attempt.blockedUntil > now) {
+    const retryAfterSec = Math.ceil((attempt.blockedUntil - now) / 1000);
+    return { allowed: false, retryAfterSec };
+  }
+
+  if (now - attempt.firstAttempt > 10 * 60 * 1000) {
+    pairingAttempts.delete(key);
+    return { allowed: true };
+  }
+
+  return { allowed: true };
+}
+
+export function recordFailedPairing(key: string): void {
+  const now = Date.now();
+  const attempt = pairingAttempts.get(key) || { count: 0, firstAttempt: now, blockedUntil: 0 };
+  attempt.count += 1;
+
+  if (attempt.count >= 5) {
+    attempt.blockedUntil = now + 10 * 60 * 1000;
+  }
+
+  pairingAttempts.set(key, attempt);
+}
+
+export function resetPairingRateLimit(key: string): void {
+  pairingAttempts.delete(key);
 }
 
 /**
@@ -246,6 +284,7 @@ export function requireDeviceAuth(req: Request, res: Response, next: NextFunctio
     organizationId: device.organizationId,
     code: device.code,
     model: device.model,
+    status: device.status,
   };
   req.resolvedTenantId = device.organizationId;
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import { Navbar, ActiveTab } from './components/Navbar';
 import { OverviewDashboard } from './components/OverviewDashboard';
 import { MapboxGeoManager } from './components/MapboxGeoManager';
@@ -43,9 +44,12 @@ export default function App() {
       const tabParam = params.get('tab');
       const roleParam = params.get('role');
 
-      if (roleParam === 'driver') return 'driver_portal';
-      if (roleParam === 'advertiser') return 'advertiser_portal';
-      if (roleParam === 'passenger') return 'passenger_portal';
+      // URL parameters can select a demo view in development only, never grant authorization
+      if (import.meta.env.DEV) {
+        if (roleParam === 'driver') return 'driver_portal';
+        if (roleParam === 'advertiser') return 'advertiser_portal';
+        if (roleParam === 'passenger') return 'passenger_portal';
+      }
 
       if (tabParam === 'player' || params.get('kiosk') === 'true' || params.get('mode') === 'kiosk') {
         return 'player';
@@ -135,19 +139,40 @@ export default function App() {
     return () => { isMounted = false; };
   }, []);
 
-  const handleUpdateOrg = (updatedOrg: SaaSOrganization) => {
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const handleUpdateOrg = async (updatedOrg: SaaSOrganization) => {
+    const previous = [...organizations];
     setOrganizations(organizations.map(o => o.id === updatedOrg.id ? updatedOrg : o));
-    apiClient.updateOrganization(updatedOrg).catch(console.error);
+    try {
+      await apiClient.updateOrganization(updatedOrg);
+    } catch (err: any) {
+      setOrganizations(previous);
+      setApiError(`Erro ao atualizar organização: ${err.message || err}`);
+    }
   };
 
-  const handleCreateOrg = (newOrg: SaaSOrganization) => {
+  const handleCreateOrg = async (newOrg: SaaSOrganization) => {
+    const previous = [...organizations];
     setOrganizations([newOrg, ...organizations]);
-    apiClient.saveOrganization(newOrg).catch(console.error);
+    try {
+      const saved = await apiClient.saveOrganization(newOrg);
+      setOrganizations(prev => [saved, ...prev.filter(o => o.id !== saved.id)]);
+    } catch (err: any) {
+      setOrganizations(previous);
+      setApiError(`Erro ao criar organização: ${err.message || err}`);
+    }
   };
 
-  const handleDeleteOrg = (orgId: string) => {
+  const handleDeleteOrg = async (orgId: string) => {
+    const previous = [...organizations];
     setOrganizations(organizations.filter(o => o.id !== orgId));
-    apiClient.deleteOrganization(orgId).catch(console.error);
+    try {
+      await apiClient.deleteOrganization(orgId);
+    } catch (err: any) {
+      setOrganizations(previous);
+      setApiError(`Erro ao remover organização: ${err.message || err}`);
+    }
   };
 
   const handleSwitchOrg = (orgId: string) => {
@@ -155,45 +180,99 @@ export default function App() {
   };
 
   // Drivers CRUD
-  const handleSaveDriver = (newDriver: Driver) => {
+  const handleSaveDriver = async (newDriver: Driver) => {
+    const previous = [...drivers];
     setDrivers([newDriver, ...drivers]);
-    apiClient.saveDriver(newDriver).catch(console.error);
+    try {
+      const saved = await apiClient.saveDriver(newDriver);
+      setDrivers(prev => [saved, ...prev.filter(d => d.id !== saved.id)]);
+    } catch (err: any) {
+      setDrivers(previous);
+      setApiError(`Erro ao salvar motorista: ${err.message || err}`);
+    }
   };
 
-  const handleUpdateDriver = (updatedDriver: Driver) => {
+  const handleUpdateDriver = async (updatedDriver: Driver) => {
+    const previous = [...drivers];
     setDrivers(drivers.map(d => d.id === updatedDriver.id ? updatedDriver : d));
-    apiClient.updateDriver(updatedDriver).catch(console.error);
+    try {
+      const updated = await apiClient.updateDriver(updatedDriver);
+      setDrivers(prev => prev.map(d => d.id === updated.id ? updated : d));
+    } catch (err: any) {
+      setDrivers(previous);
+      setApiError(`Erro ao atualizar motorista: ${err.message || err}`);
+    }
   };
 
-  const handleDeleteDriver = (driverId: string) => {
+  const handleDeleteDriver = async (driverId: string) => {
+    const previous = [...drivers];
     setDrivers(drivers.filter(d => d.id !== driverId));
-    apiClient.deleteDriver(driverId).catch(console.error);
+    try {
+      await apiClient.deleteDriver(driverId);
+    } catch (err: any) {
+      setDrivers(previous);
+      setApiError(`Erro ao excluir motorista: ${err.message || err}`);
+    }
   };
 
   // Devices CRUD
-  const handleSaveDevice = (newDev: Device) => {
+  const handleSaveDevice = async (newDev: Device) => {
+    const previous = [...devices];
     setDevices([newDev, ...devices]);
-    apiClient.saveDevice(newDev).catch(console.error);
+    try {
+      const saved = await apiClient.saveDevice(newDev);
+      setDevices(prev => [saved, ...prev.filter(d => d.id !== saved.id)]);
+    } catch (err: any) {
+      setDevices(previous);
+      setApiError(`Erro ao registrar dispositivo: ${err.message || err}`);
+    }
   };
 
-  const handleDeleteDevice = (deviceId: string) => {
+  const handleDeleteDevice = async (deviceId: string) => {
+    const previous = [...devices];
     setDevices(devices.filter(d => d.id !== deviceId));
-    apiClient.deleteDevice(deviceId).catch(console.error);
+    try {
+      await apiClient.deleteDevice(deviceId);
+    } catch (err: any) {
+      setDevices(previous);
+      setApiError(`Erro ao remover dispositivo: ${err.message || err}`);
+    }
   };
 
   // Advertisers CRUD
-  const handleSaveAdvertiser = (newAdv: AdvertiserAccount) => {
+  const handleSaveAdvertiser = async (newAdv: AdvertiserAccount) => {
+    const previous = [...advertisers];
     setAdvertisers([newAdv, ...advertisers]);
-    apiClient.saveAdvertiser(newAdv).catch(console.error);
+    try {
+      const saved = await apiClient.saveAdvertiser(newAdv);
+      setAdvertisers(prev => [saved, ...prev.filter(a => a.id !== saved.id)]);
+    } catch (err: any) {
+      setAdvertisers(previous);
+      setApiError(`Erro ao salvar anunciante: ${err.message || err}`);
+    }
   };
 
-  const handleUpdateAdvertiser = (updatedAdv: AdvertiserAccount) => {
+  const handleUpdateAdvertiser = async (updatedAdv: AdvertiserAccount) => {
+    const previous = [...advertisers];
     setAdvertisers(advertisers.map(a => a.id === updatedAdv.id ? updatedAdv : a));
-    apiClient.saveAdvertiser(updatedAdv).catch(console.error);
+    try {
+      const saved = await apiClient.saveAdvertiser(updatedAdv);
+      setAdvertisers(prev => prev.map(a => a.id === saved.id ? saved : a));
+    } catch (err: any) {
+      setAdvertisers(previous);
+      setApiError(`Erro ao atualizar anunciante: ${err.message || err}`);
+    }
   };
 
-  const handleDeleteAdvertiser = (advId: string) => {
+  const handleDeleteAdvertiser = async (advId: string) => {
+    const previous = [...advertisers];
     setAdvertisers(advertisers.filter(a => a.id !== advId));
+    try {
+      await apiClient.deleteAdvertiser(advId);
+    } catch (err: any) {
+      setAdvertisers(previous);
+      setApiError(`Erro ao excluir anunciante: ${err.message || err}`);
+    }
   };
 
   // SaaS Users CRUD
@@ -210,19 +289,38 @@ export default function App() {
   };
 
   // GeoFence handlers
-  const handleAddGeoFence = (newFence: GeoFence) => {
+  const handleAddGeoFence = async (newFence: GeoFence) => {
+    const previous = [...geoFences];
     setGeoFences([newFence, ...geoFences]);
-    apiClient.saveGeoFence(newFence).catch(console.error);
+    try {
+      const saved = await apiClient.saveGeoFence(newFence);
+      setGeoFences(prev => [saved, ...prev.filter(f => f.id !== saved.id)]);
+    } catch (err: any) {
+      setGeoFences(previous);
+      setApiError(`Erro ao salvar cerca virtual: ${err.message || err}`);
+    }
   };
 
-  const handleUpdateGeoFence = (updatedFence: GeoFence) => {
+  const handleUpdateGeoFence = async (updatedFence: GeoFence) => {
+    const previous = [...geoFences];
     setGeoFences(geoFences.map(f => f.id === updatedFence.id ? updatedFence : f));
-    apiClient.updateGeoFence(updatedFence).catch(console.error);
+    try {
+      await apiClient.saveGeoFence(updatedFence);
+    } catch (err: any) {
+      setGeoFences(previous);
+      setApiError(`Erro ao atualizar cerca virtual: ${err.message || err}`);
+    }
   };
 
-  const handleDeleteGeoFence = (fenceId: string) => {
+  const handleDeleteGeoFence = async (fenceId: string) => {
+    const previous = [...geoFences];
     setGeoFences(geoFences.filter(f => f.id !== fenceId));
-    apiClient.deleteGeoFence(fenceId).catch(console.error);
+    try {
+      await apiClient.deleteGeoFence(fenceId);
+    } catch (err: any) {
+      setGeoFences(previous);
+      setApiError(`Erro ao remover cerca virtual: ${err.message || err}`);
+    }
   };
 
   // Active player device selection
@@ -241,7 +339,7 @@ export default function App() {
   };
 
   const [activePlayerDeviceId, setActivePlayerDeviceId] = useState<string>(getInitialPlayerDeviceId);
-  const [isSimulating, setIsSimulating] = useState<boolean>(true);
+  const [isSimulating, setIsSimulating] = useState<boolean>(false);
 
   // Modals state
   const [selectedDeviceForDetail, setSelectedDeviceForDetail] = useState<Device | null>(null);
@@ -250,9 +348,9 @@ export default function App() {
   const [showMobileTesterModal, setShowMobileTesterModal] = useState<boolean>(false);
   const [showPwaInstallerModal, setShowPwaInstallerModal] = useState<boolean>(false);
 
-  // Background Telemetry Simulator loop (Simulates live IoT Heartbeats via MQTT)
+  // Background Telemetry Simulator loop (Simulates live IoT Heartbeats in development only)
   useEffect(() => {
-    if (!isSimulating) return;
+    if (!isSimulating || import.meta.env.PROD) return;
 
     const interval = setInterval(() => {
       setDevices((prevDevices) =>
@@ -459,6 +557,22 @@ export default function App() {
       {/* Main Content View Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-8">
         
+        {apiError && (
+          <div className="mb-4 bg-red-950/90 border border-red-500/60 text-red-200 px-4 py-3 rounded-lg flex items-center justify-between text-sm shadow-xl animate-fade-in">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
+              <span className="font-medium">{apiError}</span>
+            </div>
+            <button
+              onClick={() => setApiError(null)}
+              className="text-red-300 hover:text-white p-1 ml-3 rounded hover:bg-red-900/50 cursor-pointer transition-colors"
+              title="Fechar aviso de erro"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Independent SaaS Master Admin Module */}
         {isMasterMode ? (
           <SaaSMasterAdmin

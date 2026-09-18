@@ -349,13 +349,14 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
       speedKmH: 0,
       heading: 0,
       city: driver.workingCity,
-    } : { lat: -23.561684, lng: -46.655981, speedKmH: 0, heading: 0, city: 'São Paulo' },
+      neighborhood: 'Região Operacional',
+    } : { lat: -23.561684, lng: -46.655981, speedKmH: 0, heading: 0, city: 'São Paulo', neighborhood: 'Centro' },
     telemetry: {
       powerConnected: true,
       batteryLevel: 100,
       batteryVoltage: 12.6,
       cpuTemp: 35.0,
-      signalStrength: '4G',
+      signalStrength: '4G_GOOD',
       signalDbm: -72,
       storageFreeGb: 16.0,
       totalStorageGb: 32.0,
@@ -382,7 +383,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
       macAddress: '02:00:00:00:00:01',
       imei: '000000000000001',
       simCarrier: 'IoT M2M',
-      connectivity: '4G_LTE',
+      connectivity: '4G_LTE_M2M',
       mountType: 'Suporte de Encosto Antifurto',
       powerSupply: '12V Pós-Chave',
       storageGb: 32,
@@ -478,6 +479,16 @@ apiRouter.post('/geofences', requireAuth, validateBody(GeoFenceSchema), (req: Re
   res.status(201).json(saved);
 });
 
+apiRouter.put('/geofences/:id', requireAuth, validateBody(GeoFenceSchema), (req: Request, res: Response) => {
+  const tenantId = resolveTenant(req);
+  const existing = storage.getGeoFenceById(req.params.id, tenantId);
+  if (!existing) {
+    return res.status(404).json({ error: 'not_found', message: 'GeoFence não encontrada neste tenant.' });
+  }
+  const updated = storage.saveGeoFence(req.body as GeoFence, tenantId);
+  res.json(updated);
+});
+
 apiRouter.delete('/geofences/:id', requireAuth, (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   const deleted = storage.deleteGeoFence(req.params.id, tenantId);
@@ -498,98 +509,141 @@ apiRouter.get('/proof-of-play', requireAuth, (req: Request, res: Response) => {
 
 /**
  * Ingest cryptographically signed Proof-of-Play from tablet.
- * Section 6: Server NEVER signs on behalf of client. Requires valid signature and anti-replay nonce.
+ * Section 6 & Fase 3: Server NEVER signs on behalf of client.
+ * Requires device cryptographic auth (requireDeviceAuth), valid payload signature,
+ * matching device identity, and records anti-replay nonce only after signature verification.
  */
-apiRouter.post('/proof-of-play', validateBody(ProofOfPlaySubmissionSchema), (req: Request, res: Response): void => {
-  const item = req.body;
-  const endedAtTimestamp = new Date(item.endedAt).getTime();
+apiRouter.post(
+  '/proof-of-play',
+  requireDeviceAuth,
+  validateBody(ProofOfPlaySubmissionSchema),
+  (req: Request, res: Response): void => {
+    const item = req.body;
+    const authDevice = req.device!;
+    const cred = req.deviceCredential!;
 
-  if (isNaN(endedAtTimestamp)) {
-    res.status(400).json({ error: 'invalid_date', message: 'endedAt inválido.' });
-    return;
-  }
+    // 1. Validate device match (authenticated device in headers vs payload deviceId)
+    if (authDevice.id !== item.deviceId && authDevice.code !== item.deviceId) {
+      res.status(403).json({
+        error: 'device_mismatch',
+        message: 'O dispositivo autenticado na requisição difere do deviceId informado no payload.',
+      });
+      return;
+    }
 
-  // 1. Check anti-replay for eventId and nonce
-  const replayResult = storage.checkAndRecordReplay(item.eventId, item.nonce, endedAtTimestamp);
-  if (!replayResult.valid) {
-    res.status(400).json({
-      error: 'replay_detected',
-      message: replayResult.reason || 'Replay de Proof of Play detectado.',
-    });
-    return;
-  }
+    // 2. Validate device state
+    if (authDevice.status === 'retired') {
+      res.status(403).json({
+        error: 'device_retired',
+        message: 'Dispositivo desativado permanentemente.',
+      });
+      return;
+    }
 
-  // 2. Lookup device credentials
-  const cred = storage.getDeviceCredential(item.deviceId);
-  if (!cred || cred.revoked) {
-    res.status(401).json({
-      error: 'device_credentials_not_found',
-      message: 'Dispositivo sem credencial criptográfica ativa.',
-    });
-    return;
-  }
+    // 3. Validate campaign exists and belongs to the device's tenant
+    const tenantId = authDevice.organizationId;
+    const campaign = storage.getCampaignById(item.campaignId, tenantId);
+    if (!campaign) {
+      res.status(404).json({
+        error: 'campaign_not_found',
+        message: 'Campanha não encontrada ou pertence a outra organização.',
+      });
+      return;
+    }
 
-  // 3. Verify HMAC signature using device secret
-  const isValid = verifyProofOfPlaySignature(
-    {
-      eventId: item.eventId,
-      deviceId: item.deviceId,
+    if (campaign.status !== 'active') {
+      res.status(400).json({
+        error: 'campaign_not_active',
+        message: 'A campanha informada não está ativa para veiculação.',
+      });
+      return;
+    }
+
+    // 4. Verify Proof of Play HMAC signature (BEFORE registering anti-replay nonce)
+    const isSignatureValid = verifyProofOfPlaySignature(
+      {
+        eventId: item.eventId,
+        deviceId: item.deviceId,
+        campaignId: item.campaignId,
+        creativeId: item.creativeId,
+        startedAt: item.startedAt,
+        endedAt: item.endedAt,
+        durationMs: item.durationMs,
+        nonce: item.nonce,
+        signature: item.signature,
+      },
+      cred.deviceSecret
+    );
+
+    if (!isSignatureValid) {
+      res.status(401).json({
+        error: 'invalid_proof_of_play_signature',
+        message: 'Assinatura HMAC de Proof of Play inválida ou adulterada.',
+      });
+      return;
+    }
+
+    // 5. Validate timestamp window and duration consistency
+    const startedAtTimestamp = new Date(item.startedAt).getTime();
+    const endedAtTimestamp = new Date(item.endedAt).getTime();
+
+    if (isNaN(startedAtTimestamp) || isNaN(endedAtTimestamp) || endedAtTimestamp < startedAtTimestamp) {
+      res.status(400).json({ error: 'invalid_date_window', message: 'Janela de reprodução (startedAt / endedAt) inválida.' });
+      return;
+    }
+
+    const calculatedDuration = endedAtTimestamp - startedAtTimestamp;
+    if (Math.abs(calculatedDuration - item.durationMs) > 2000) {
+      res.status(400).json({ error: 'duration_mismatch', message: 'durationMs inconsistente com intervalo startedAt/endedAt.' });
+      return;
+    }
+
+    const now = Date.now();
+    const maxSkewMs = 10 * 60 * 1000; // 10 minutes
+    if (Math.abs(now - endedAtTimestamp) > maxSkewMs) {
+      res.status(400).json({
+        error: 'timestamp_out_of_window',
+        message: 'Timestamp do evento fora da janela de tolerância permitida.',
+      });
+      return;
+    }
+
+    // 6. Check and record anti-replay (ATOMICALLY AFTER VALID SIGNATURE)
+    const replayResult = storage.checkAndRecordReplay(item.eventId, item.nonce, endedAtTimestamp);
+    if (!replayResult.valid) {
+      res.status(400).json({
+        error: 'replay_detected',
+        message: replayResult.reason || 'Replay de Proof of Play detectado.',
+      });
+      return;
+    }
+
+    // 7. Record verified log
+    const durationSec = Math.round(item.durationMs / 1000);
+    const log: ProofOfPlayLog = {
+      id: item.eventId,
+      timestamp: item.startedAt || new Date().toISOString(),
       campaignId: item.campaignId,
-      creativeId: item.creativeId,
+      campaignName: campaign.name,
+      advertiser: campaign.advertiser,
+      deviceId: item.deviceId,
       startedAt: item.startedAt,
       endedAt: item.endedAt,
-      durationMs: item.durationMs,
-      nonce: item.nonce,
+      durationWatchedSec: durationSec,
+      location: item.location,
+      interacted: item.interacted,
+      interactionType: item.interactionType,
+      verifiedHash: item.signature,
       signature: item.signature,
-    },
-    cred.deviceSecret
-  );
+      nonce: item.nonce,
+      syncedOnline: true,
+      organizationId: tenantId,
+    };
 
-  if (!isValid) {
-    res.status(401).json({
-      error: 'invalid_proof_of_play_signature',
-      message: 'Assinatura HMAC de Proof of Play inválida ou adulterada.',
-    });
-    return;
+    const recorded = storage.recordProofOfPlay(log, tenantId);
+    res.json({ success: true, recorded, eventId: item.eventId });
   }
-
-  // 4. Validate device and campaign belong to the same tenant
-  const tenantId = cred.organizationId;
-  const device = storage.getDeviceById(item.deviceId, tenantId);
-  const campaign = storage.getCampaignById(item.campaignId, tenantId);
-
-  if (!device || !campaign) {
-    res.status(404).json({
-      error: 'resource_not_found',
-      message: 'Dispositivo ou campanha não encontrados no tenant associado.',
-    });
-    return;
-  }
-
-  // 5. Record verified log
-  const durationSec = Math.round(item.durationMs / 1000);
-  const log: ProofOfPlayLog = {
-    id: item.eventId,
-    campaignId: item.campaignId,
-    campaignName: campaign.name,
-    advertiser: campaign.advertiser,
-    deviceId: item.deviceId,
-    startedAt: item.startedAt,
-    endedAt: item.endedAt,
-    durationWatchedSec: durationSec,
-    location: item.location,
-    interacted: item.interacted,
-    interactionType: item.interactionType,
-    verifiedHash: item.signature,
-    signature: item.signature,
-    nonce: item.nonce,
-    syncedOnline: true,
-    organizationId: tenantId,
-  };
-
-  const recorded = storage.recordProofOfPlay(log, tenantId);
-  res.json({ success: true, recorded, eventId: item.eventId });
-});
+);
 
 // ============================================================================
 // 9. TELEMETRY & HARDWARE HEARTBEAT (Authenticated)

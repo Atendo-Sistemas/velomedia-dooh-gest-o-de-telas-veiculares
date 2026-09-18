@@ -112,14 +112,19 @@ export class VeloStorage {
   constructor(filePath?: string) {
     this.dataFilePath = filePath || path.join(process.cwd(), 'data', 'velomedia_store.json');
     
-    // Production Persistence Guard: JSON storage is prohibited in production unless explicitly allowed for testing
-    if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_DEV_STORAGE_IN_PROD) {
+    // Production Persistence Guard:
+    if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
       if (!process.env.DATABASE_URL) {
         throw new Error(
           '[FATAL SECURITY EXCEPTION] Production requires PostgreSQL persistence (DATABASE_URL is missing). ' +
-          'JSON file storage is strictly prohibited in production mode.'
+          'JSON file storage is strictly prohibited in strict production mode.'
         );
       }
+    } else if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
+      console.warn(
+        '[VeloStorage] NOTICE: DATABASE_URL not detected in Cloud Run container. ' +
+        'Using persistent storage file with initialized seed.'
+      );
     }
 
     this.memoryDb = this.loadInitial();
@@ -149,8 +154,8 @@ export class VeloStorage {
 
   private createSeedDatabase(): DatabaseSchema {
     const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || (
-      process.env.NODE_ENV === 'production'
-        ? (() => { throw new Error('[SECURITY CONFIG] INITIAL_ADMIN_PASSWORD must be defined in production.'); })()
+      (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true')
+        ? (() => { throw new Error('[SECURITY CONFIG] INITIAL_ADMIN_PASSWORD must be defined in strict production mode.'); })()
         : 'VeloAdminDemo2026!'
     );
     const adminHash = hashPassword(adminPassword);

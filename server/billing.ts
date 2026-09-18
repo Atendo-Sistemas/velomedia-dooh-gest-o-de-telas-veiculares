@@ -165,3 +165,51 @@ export class VeloPixGatewayAdapter {
 }
 
 export const pixGateway = new VeloPixGatewayAdapter();
+
+function computeCrc16(payload: string): string {
+  let crc = 0xFFFF;
+  for (let i = 0; i < payload.length; i++) {
+    crc ^= payload.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+      } else {
+        crc = (crc << 1) & 0xFFFF;
+      }
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+export function generatePixEmvPayload(params: {
+  key: string;
+  name: string;
+  city: string;
+  amount?: number;
+  txid?: string;
+  description?: string;
+}): string {
+  const formatField = (id: string, value: string): string => {
+    const len = value.length.toString().padStart(2, '0');
+    return `${id}${len}${value}`;
+  };
+
+  const gui = formatField('00', 'br.gov.bcb.pix');
+  const key = formatField('01', params.key);
+  const desc = params.description ? formatField('02', params.description) : '';
+  const merchantAccount = formatField('26', `${gui}${key}${desc}`);
+
+  const merchantCategory = formatField('52', '0000');
+  const currency = formatField('53', '986');
+  const amountStr = params.amount !== undefined ? formatField('54', params.amount.toFixed(2)) : '';
+  const country = formatField('58', 'BR');
+  const name = formatField('59', params.name.substring(0, 25).toUpperCase());
+  const city = formatField('60', params.city.substring(0, 15).toUpperCase());
+  
+  const txid = formatField('05', (params.txid || '***').substring(0, 25));
+  const additionalData = formatField('62', txid);
+
+  const rawPayload = `000201${merchantAccount}${merchantCategory}${currency}${amountStr}${country}${name}${city}${additionalData}6304`;
+  const checksum = computeCrc16(rawPayload);
+  return `${rawPayload}${checksum}`;
+}
