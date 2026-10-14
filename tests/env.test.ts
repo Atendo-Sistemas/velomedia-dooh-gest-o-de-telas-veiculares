@@ -45,4 +45,16 @@ describe('production environment validation', () => {
       'INITIAL_ADMIN_PASSWORD',
     ]);
   });
+
+  it('rejects non-loopback binds and storage paths outside the persistent data directory', () => {
+    const result = validateEnvironment({
+      ...validProductionEnv,
+      HOST: '0.0.0.0',
+      DATA_FILE_PATH: '/tmp/velomedia.json',
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
+    expect(result.errors).toContain('HOST deve ser localhost ou um endereço de loopback em produção.');
+  });
 });

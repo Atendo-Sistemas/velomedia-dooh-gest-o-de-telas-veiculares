@@ -53,7 +53,7 @@ O sistema também não integra um provedor PIX transacional nem concilia pagamen
    sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
    ```
 
-   Altere `app.example.com` no Caddyfile para o domínio apontado para a VPS. A configuração do Caddy termina TLS automaticamente. Libere no firewall apenas SSH e HTTP/HTTPS; a aplicação deve permanecer em `127.0.0.1:3000`.
+   `app.example.com` é apenas um exemplo: substitua pelo domínio real, com DNS apontado para a VPS, tanto no Caddyfile quanto em `CORS_ALLOWED_ORIGINS`. A configuração do Caddy termina TLS automaticamente. Libere no firewall apenas SSH e HTTP/HTTPS; o serviço fixa `NODE_ENV=production` e mantém a aplicação em `127.0.0.1:3000`. A API rejeita origens não autorizadas em operações que alteram dados e envia cabeçalhos HTTP de segurança.
 
 6. Inicie e verifique o serviço:
 
