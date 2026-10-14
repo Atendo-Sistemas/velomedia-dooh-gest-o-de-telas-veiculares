@@ -3,6 +3,8 @@
  * Enforces fail-fast validation before the HTTP server binds to any port.
  */
 
+import path from 'node:path';
+
 export interface EnvValidationResult {
   valid: boolean;
   missing: string[];
@@ -10,54 +12,67 @@ export interface EnvValidationResult {
 }
 
 export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvValidationResult {
-  const isStrictProd = env.NODE_ENV === 'production' && env.STRICT_PROD_ENV === 'true';
   const missing: string[] = [];
   const errors: string[] = [];
 
-  const requiredVars = [
-    'SESSION_SECRET',
-    'DEVICE_HMAC_MASTER_SECRET',
-    'WEBHOOK_SECRET',
-    'CORS_ALLOWED_ORIGINS',
-    'DATABASE_URL',
-  ];
+  if (env.NODE_ENV === 'production') {
+    const requiredVars = [
+      'WEBHOOK_SECRET',
+      'CORS_ALLOWED_ORIGINS',
+      'DATA_FILE_PATH',
+      'INITIAL_ADMIN_EMAIL',
+      'INITIAL_ADMIN_PASSWORD',
+    ];
 
-  if (isStrictProd) {
-    // 1. Mandatory Secrets & URLs for Dedicated Strict Production
     for (const v of requiredVars) {
       const val = env[v];
       if (!val || val.trim().length === 0) {
         missing.push(v);
-        errors.push(`Vulnerabilidade crítica: variável obrigatória de produção '${v}' ausente ou vazia.`);
+        errors.push(`Variável obrigatória de produção '${v}' ausente ou vazia.`);
       }
     }
 
-    // 2. Disallow insecure test/dev bypass flags in strict production
     if (env.BYPASS_ENV_CHECK === 'true') {
-      errors.push("BYPASS_ENV_CHECK é estritamente proibido em ambiente de produção.");
+      errors.push('BYPASS_ENV_CHECK é proibido em ambiente de produção.');
     }
 
-    // 3. Billing Provider Credentials validation (if billing enabled)
-    if (env.BILLING_ENABLED === 'true') {
-      const billingVars = ['PIX_KEY', 'PIX_PROVIDER_CLIENT_ID', 'PIX_PROVIDER_CLIENT_SECRET'];
-      for (const bv of billingVars) {
-        if (!env[bv] || env[bv]!.trim().length === 0) {
-          missing.push(bv);
-          errors.push(`Billing está ativado (BILLING_ENABLED=true), mas a credencial '${bv}' não foi configurada.`);
+    const webhookSecret = env.WEBHOOK_SECRET?.trim();
+    if (webhookSecret && webhookSecret.length < 32) {
+      errors.push('WEBHOOK_SECRET deve conter no mínimo 32 caracteres.');
+    }
+
+    const adminPassword = env.INITIAL_ADMIN_PASSWORD;
+    if (adminPassword && adminPassword.length < 16) {
+      errors.push('INITIAL_ADMIN_PASSWORD deve conter no mínimo 16 caracteres.');
+    }
+
+    const adminEmail = env.INITIAL_ADMIN_EMAIL?.trim();
+    if (adminEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) {
+      errors.push('INITIAL_ADMIN_EMAIL deve ser um endereço de e-mail válido.');
+    }
+
+    const dataFilePath = env.DATA_FILE_PATH?.trim();
+    if (dataFilePath && !path.isAbsolute(dataFilePath)) {
+      errors.push('DATA_FILE_PATH deve ser um caminho absoluto em armazenamento persistente.');
+    }
+
+    const origins = (env.CORS_ALLOWED_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean);
+    if (origins.includes('*')) {
+      errors.push('CORS_ALLOWED_ORIGINS não pode conter o curinga "*".');
+    }
+    for (const origin of origins) {
+      try {
+        const parsed = new URL(origin);
+        if (parsed.protocol !== 'https:' || parsed.origin !== origin) {
+          errors.push(`Origem CORS inválida para produção: '${origin}'. Use uma origem HTTPS sem caminho.`);
         }
+      } catch {
+        errors.push(`Origem CORS inválida para produção: '${origin}'.`);
       }
     }
-  } else if (env.NODE_ENV === 'production') {
-    // In Cloud Run managed deployment, log informational warnings without crashing the container rollout
-    for (const v of requiredVars) {
-      if (!env[v] || env[v]!.trim().length === 0) {
-        missing.push(v);
-      }
-    }
-    if (missing.length > 0) {
-      console.warn(
-        `[VeloMedia DOOH] Cloud Run container initialized with resilient runtime defaults. Unset variables: ${missing.join(', ')}`
-      );
+
+    if (env.PORT && (!/^\d+$/.test(env.PORT) || Number(env.PORT) < 1 || Number(env.PORT) > 65535)) {
+      errors.push('PORT deve ser um número entre 1 e 65535.');
     }
   }
 

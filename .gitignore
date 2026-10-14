@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+/data/velomedia_store.json
+/data/test_store.json

@@ -1,20 +1,22 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
-import { apiRouter } from './server/api';
-import { authMiddleware } from './server/auth';
 import { enforceProductionEnvironment } from './server/env';
 
-const PORT = 3000;
-const HOST = '0.0.0.0';
-
 async function startServer() {
-  // Fail-fast guard: ensures all critical production secrets and configurations are validated
   enforceProductionEnvironment();
 
+  const [{ apiRouter }, { authMiddleware }] = await Promise.all([
+    import('./server/api'),
+    import('./server/auth'),
+  ]);
   const app = express();
+  const port = Number(process.env.PORT || 3000);
+  const host = process.env.HOST || '0.0.0.0';
+  app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : false);
 
   // Strict CORS configuration
   const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
@@ -30,11 +32,8 @@ async function startServer() {
       if (!origin) return callback(null, true);
 
       if (
-        devOrigins.includes(origin) ||
-        origin.endsWith('.run.app') ||
-        origin.includes('localhost') ||
-        allowedOrigins.includes(origin) ||
-        allowedOrigins.includes('*')
+        (process.env.NODE_ENV !== 'production' && devOrigins.includes(origin)) ||
+        allowedOrigins.includes(origin)
       ) {
         return callback(null, true);
       }
@@ -71,8 +70,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, HOST, () => {
-    console.log(`[VeloMedia DOOH] Full-Stack Production Server running on http://${HOST}:${PORT}`);
+  app.listen(port, host, () => {
+    console.log(`[VeloMedia DOOH] Server running on http://${host}:${port}`);
   });
 }
 

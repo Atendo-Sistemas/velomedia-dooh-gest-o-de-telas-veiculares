@@ -1,5 +1,4 @@
-import fs from 'node:crypto';
-import fsPromises from 'node:fs/promises';
+import crypto from 'node:crypto';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { hashPassword } from './crypto';
@@ -106,26 +105,12 @@ interface DatabaseSchema {
 export class VeloStorage {
   private dataFilePath: string;
   private memoryDb: DatabaseSchema;
-  private isSaving: boolean = false;
-  private pendingSave: boolean = false;
 
   constructor(filePath?: string) {
-    this.dataFilePath = filePath || path.join(process.cwd(), 'data', 'velomedia_store.json');
-    
-    // Production Persistence Guard:
-    if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
-      if (!process.env.DATABASE_URL) {
-        throw new Error(
-          '[FATAL SECURITY EXCEPTION] Production requires PostgreSQL persistence (DATABASE_URL is missing). ' +
-          'JSON file storage is strictly prohibited in strict production mode.'
-        );
-      }
-    } else if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
-      console.warn(
-        '[VeloStorage] NOTICE: DATABASE_URL not detected in Cloud Run container. ' +
-        'Using persistent storage file with initialized seed.'
-      );
+    if (!filePath && process.env.NODE_ENV === 'production' && !process.env.DATA_FILE_PATH) {
+      throw new Error('DATA_FILE_PATH must point to persistent storage in production.');
     }
+    this.dataFilePath = path.resolve(filePath || process.env.DATA_FILE_PATH || path.join(process.cwd(), 'data', 'velomedia_store.json'));
 
     this.memoryDb = this.loadInitial();
   }
@@ -140,12 +125,18 @@ export class VeloStorage {
       if (fsSync.existsSync(this.dataFilePath)) {
         const raw = fsSync.readFileSync(this.dataFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.organizations) || !Array.isArray(parsed.users)) {
+          throw new Error('Store file does not contain a valid database schema.');
+        }
         if (!parsed.deviceCredentials) parsed.deviceCredentials = [];
         if (!parsed.replayLogs) parsed.replayLogs = [];
         if (!parsed.webhooks) parsed.webhooks = [];
         return parsed;
       }
     } catch (err) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(`Could not load production storage file at '${this.dataFilePath}'.`, { cause: err });
+      }
       console.warn('[VeloStorage] Could not read existing store, creating fresh store with seed:', err);
     }
 
@@ -154,11 +145,80 @@ export class VeloStorage {
 
   private createSeedDatabase(): DatabaseSchema {
     const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || (
-      (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true')
+      process.env.NODE_ENV === 'production'
         ? (() => { throw new Error('[SECURITY CONFIG] INITIAL_ADMIN_PASSWORD must be defined in strict production mode.'); })()
         : 'VeloAdminDemo2026!'
     );
     const adminHash = hashPassword(adminPassword);
+
+    if (process.env.NODE_ENV === 'production') {
+      const organizationId = `org_${crypto.randomUUID()}`;
+      const organizationName = process.env.INITIAL_ORGANIZATION_NAME?.trim() || 'VeloMedia';
+      const admin = {
+        name: process.env.INITIAL_ADMIN_NAME?.trim() || 'Administrador',
+        email: process.env.INITIAL_ADMIN_EMAIL!.trim().toLowerCase(),
+        phone: '',
+      };
+      const now = new Date().toISOString();
+      const organization: SaaSOrganization = {
+        id: organizationId,
+        name: organizationName,
+        slug: `velomedia-${crypto.randomUUID().slice(0, 8)}`,
+        cnpj: '',
+        city: '',
+        state: '',
+        planTier: 'starter',
+        activeScreensCount: 0,
+        maxScreensLimit: 5,
+        activeCampaignsCount: 0,
+        maxCampaignsLimit: 10,
+        activeDriversCount: 0,
+        maxDriversLimit: 5,
+        adminUser: admin,
+        billingEmail: admin.email,
+        billingCycle: 'monthly',
+        nextBillingDate: now.slice(0, 10),
+        monthlySoftwareCost: 0,
+        estimatedGrossAdRevenue: 0,
+        driverPayoutTotal: 0,
+        netProfit: 0,
+        status: 'active',
+      };
+      const user: SaaSUser & { passwordHash: string } = {
+        id: `user_${crypto.randomUUID()}`,
+        name: admin.name,
+        email: admin.email,
+        phone: admin.phone,
+        role: 'platform_admin',
+        organizationId,
+        organizationName,
+        status: 'active',
+        permissions: ['*'],
+        createdAt: now,
+        passwordHash: adminHash,
+      };
+      const schema: DatabaseSchema = {
+        version: 2,
+        organizations: [organization],
+        users: [user],
+        drivers: [],
+        devices: [],
+        campaigns: [],
+        geofences: [],
+        proofOfPlayLogs: [],
+        advertisers: [],
+        invoices: [],
+        auditLogs: [],
+        pairingTokens: [],
+        remoteCommands: [],
+        sessions: [],
+        deviceCredentials: [],
+        replayLogs: [],
+        webhooks: [],
+      };
+      this.saveImmediate(schema);
+      return schema;
+    }
 
     // LGPD-compliant seed data with sanitized demo domains (.invalid) and mock CNPJs
     const initialOrgs: SaaSOrganization[] = [
@@ -580,46 +640,41 @@ export class VeloStorage {
   }
 
   /**
-   * Atomic sequential disk write avoiding dropped updates under concurrency.
+   * Persist every mutation atomically before returning to the caller.
    */
   private save(): void {
-    if (this.isSaving) {
-      this.pendingSave = true;
-      return;
-    }
-
-    this.isSaving = true;
-    this.pendingSave = false;
-
-    setTimeout(() => {
+    const tempPath = `${this.dataFilePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      fsSync.writeFileSync(tempPath, JSON.stringify(this.memoryDb, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      fsSync.renameSync(tempPath, this.dataFilePath);
+      fsSync.chmodSync(this.dataFilePath, 0o600);
+    } catch (err) {
       try {
-        const dir = path.dirname(this.dataFilePath);
-        if (!fsSync.existsSync(dir)) {
-          fsSync.mkdirSync(dir, { recursive: true });
-        }
-        const tempPath = `${this.dataFilePath}.${Date.now()}.tmp`;
-        fsSync.writeFileSync(tempPath, JSON.stringify(this.memoryDb, null, 2), 'utf-8');
-        fsSync.renameSync(tempPath, this.dataFilePath);
-      } catch (err) {
-        console.error('[VeloStorage] Atomic save error:', err);
-      } finally {
-        this.isSaving = false;
-        if (this.pendingSave) {
-          this.save();
-        }
+        fsSync.rmSync(tempPath, { force: true });
+      } catch {
+        // Preserve the original persistence error.
       }
-    }, 10);
+      throw err;
+    }
   }
 
   private saveImmediate(schema: DatabaseSchema): void {
+    const tempPath = `${this.dataFilePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       const dir = path.dirname(this.dataFilePath);
       if (!fsSync.existsSync(dir)) {
         fsSync.mkdirSync(dir, { recursive: true });
       }
-      fsSync.writeFileSync(this.dataFilePath, JSON.stringify(schema, null, 2), 'utf-8');
+      fsSync.writeFileSync(tempPath, JSON.stringify(schema, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      fsSync.renameSync(tempPath, this.dataFilePath);
+      fsSync.chmodSync(this.dataFilePath, 0o600);
     } catch (err) {
-      console.error('[VeloStorage] saveImmediate error:', err);
+      try {
+        fsSync.rmSync(tempPath, { force: true });
+      } catch {
+        // Preserve the original persistence error.
+      }
+      throw err;
     }
   }
 

@@ -109,16 +109,9 @@ export class VeloPixGatewayAdapter {
       };
     }
 
-    // When configured with real credentials (e.g. EFI Bank / Asaas)
-    const txid = this.generateSecureTxid();
-    const copiaECola = `00020126580014br.gov.bcb.pix0136${this.config.pixKey}520400005303986540${params.amount.toFixed(2)}5802BR5918VELOMEDIA DOOH6009SAO PAULO62070503***6304ABCD`;
-
     return {
-      status: 'created',
-      txid,
-      copiaECola,
-      qrCodeSvg: this.generateLocalQrCodeSvg(copiaECola),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      status: 'payment_provider_not_configured',
+      error: 'A integração transacional com o provedor PIX ainda não está implementada.',
     };
   }
 

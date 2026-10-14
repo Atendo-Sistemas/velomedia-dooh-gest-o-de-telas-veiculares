@@ -98,4 +98,34 @@ describe('VeloMedia Multi-Tenant Storage Isolation', () => {
 
     if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
   });
+
+  it('should bootstrap production storage with only the configured administrator', () => {
+    const previousEnv = {
+      NODE_ENV: process.env.NODE_ENV,
+      DATA_FILE_PATH: process.env.DATA_FILE_PATH,
+      INITIAL_ADMIN_EMAIL: process.env.INITIAL_ADMIN_EMAIL,
+      INITIAL_ADMIN_PASSWORD: process.env.INITIAL_ADMIN_PASSWORD,
+    };
+
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATA_FILE_PATH = testDbPath;
+      process.env.INITIAL_ADMIN_EMAIL = 'owner@example.com';
+      process.env.INITIAL_ADMIN_PASSWORD = 'a-long-test-password';
+      if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+
+      const store = new VeloStorage();
+      expect(store.getUsers()).toHaveLength(1);
+      expect(store.getUsers()[0].email).toBe('owner@example.com');
+      expect(store.getOrganizations()).toHaveLength(1);
+      expect(store.getDevices(store.getOrganizations()[0].id)).toEqual([]);
+      expect(fs.statSync(testDbPath).mode & 0o777).toBe(0o600);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+    }
+  });
 });
