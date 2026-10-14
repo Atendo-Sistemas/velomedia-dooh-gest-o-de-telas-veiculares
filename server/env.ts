@@ -54,6 +54,16 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
     const dataFilePath = env.DATA_FILE_PATH?.trim();
     if (dataFilePath && !path.isAbsolute(dataFilePath)) {
       errors.push('DATA_FILE_PATH deve ser um caminho absoluto em armazenamento persistente.');
+    } else if (dataFilePath) {
+      const relativePath = path.relative('/var/lib/velomedia', path.resolve(dataFilePath));
+      if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+        errors.push('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
+      }
+    }
+
+    const host = env.HOST?.trim();
+    if (host && !['127.0.0.1', '::1', 'localhost'].includes(host)) {
+      errors.push('HOST deve ser localhost ou um endereço de loopback em produção.');
     }
 
     const origins = (env.CORS_ALLOWED_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean);

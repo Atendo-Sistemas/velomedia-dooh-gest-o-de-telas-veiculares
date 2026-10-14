@@ -6,6 +6,50 @@ export const LoginSchema = z.object({
   password: z.string().min(6, 'Senha deve ter pelo menos 6 caracteres'),
 });
 
+export const OrganizationSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  slug: z.string().min(1),
+  subdomain: z.string().optional(),
+  cnpj: z.string(),
+  city: z.string(),
+  state: z.string(),
+  planTier: z.enum(['starter', 'pro_fleet', 'enterprise_network']),
+  activeScreensCount: z.number().nonnegative(),
+  maxScreensLimit: z.number().nonnegative(),
+  activeCampaignsCount: z.number().nonnegative(),
+  maxCampaignsLimit: z.number().nonnegative(),
+  activeDriversCount: z.number().nonnegative(),
+  maxDriversLimit: z.number().nonnegative(),
+  adminUser: z.object({
+    name: z.string(),
+    email: z.string().email(),
+    phone: z.string(),
+  }),
+  billingEmail: z.string().email(),
+  billingCycle: z.enum(['monthly', 'annual']),
+  nextBillingDate: z.string(),
+  monthlySoftwareCost: z.number().nonnegative(),
+  estimatedGrossAdRevenue: z.number().nonnegative(),
+  driverPayoutTotal: z.number().nonnegative(),
+  netProfit: z.number(),
+  status: z.enum(['active', 'trial', 'past_due', 'suspended']),
+  customDomain: z.string().optional(),
+  mapboxConfig: z.object({
+    customToken: z.string().optional(),
+    styleUrl: z.string().optional(),
+    centerLat: z.number().min(-90).max(90),
+    centerLng: z.number().min(-180).max(180),
+    defaultZoom: z.number().positive(),
+  }).optional(),
+});
+
+export const PairingTokenRequestSchema = z.object({
+  driverId: z.string().optional(),
+  screenPosition: z.enum(['headrest_right', 'headrest_left', 'center_console', 'front_dash']).optional(),
+  hardwareOwnership: z.enum(['company_owned', 'driver_byod']).optional(),
+});
+
 export const DriverSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
@@ -213,6 +257,51 @@ export const TelemetryHeartbeatSchema = z.object({
 export const RemoteCommandSchema = z.object({
   deviceId: z.string().min(1),
   command: z.enum(['REBOOT_APP', 'FORCE_SYNC', 'SCREEN_ON', 'SCREEN_OFF', 'CLEAR_CACHE']),
+});
+
+export const AdvertiserSchema = z.object({
+  id: z.string().min(1),
+  organizationId: z.string().optional(),
+  companyName: z.string().min(1),
+  name: z.string().optional(),
+  tradeName: z.string().min(1),
+  cnpj: z.string(),
+  category: z.enum(['food_beverage', 'tech_finance', 'retail', 'automotive', 'entertainment', 'health']),
+  contactName: z.string().min(1),
+  email: z.string().email(),
+  phone: z.string(),
+  billingAddress: z.string(),
+  city: z.string(),
+  state: z.string(),
+  paymentTerms: z.enum(['prepaid', 'postpaid_30d', 'monthly_retainer']),
+  creditLimit: z.number().nonnegative(),
+  currentBalance: z.number(),
+  balance: z.number().optional(),
+  status: z.enum(['active', 'pending_verification', 'blocked']),
+  activeCampaignsCount: z.number().nonnegative(),
+  totalSpent: z.number().nonnegative(),
+  portalAccessCode: z.string().min(1),
+  createdAt: z.string(),
+});
+
+export const InvoiceSchema = z.object({
+  id: z.string().min(1),
+  invoiceNumber: z.string().min(1),
+  organizationId: z.string().optional(),
+  organizationName: z.string().optional(),
+  month: z.string().optional(),
+  issueDate: z.string(),
+  dueDate: z.string(),
+  amount: z.number().nonnegative(),
+  status: z.enum(['paid', 'pending', 'overdue']),
+  screensBilled: z.number().nonnegative(),
+  devicesBilled: z.number().nonnegative().optional(),
+  paymentMethod: z.enum(['pix', 'credit_card', 'bank_slip']),
+  pixQrCodeUrl: z.string().optional(),
+  pixQrCode: z.string().optional(),
+  pdfDownloadUrl: z.string().optional(),
+  txid: z.string().optional(),
+  paidAt: z.string().optional(),
 });
 
 export const WebhookEventSchema = z.object({

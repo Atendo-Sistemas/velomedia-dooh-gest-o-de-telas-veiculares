@@ -8,13 +8,22 @@ User=velomedia
 Group=velomedia
 WorkingDirectory=/opt/velomedia
 EnvironmentFile=/etc/velomedia/velomedia.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/node /opt/velomedia/dist/server.cjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectHome=true
 ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/velomedia
 UMask=0077
 

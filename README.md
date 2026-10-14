@@ -17,7 +17,7 @@ Em desenvolvimento, o sistema cria dados demonstrativos em `data/velomedia_store
 
 A implantação suportada neste repositório é uma única instância Node.js com persistência JSON em disco local. O arquivo deve ficar em um volume persistente e ser incluído em backups. Esta implementação não conecta ao PostgreSQL: `server/db/schema.sql` e `server/repository.ts` ainda não são usados pela API. Não execute múltiplas instâncias nem coloque os dados em um disco efêmero ou compartilhado; o armazenamento JSON síncrono é destinado a instalações pequenas e não oferece alta disponibilidade.
 
-O sistema também não integra um provedor PIX transacional nem concilia pagamentos por webhook. Cobranças são recusadas explicitamente, inclusive se credenciais PIX forem informadas; não use a resposta de cobrança como confirmação de pagamento.
+O sistema também não integra um provedor PIX transacional nem concilia pagamentos por webhook ou repasses. Cobranças, webhooks de pagamento e repasses são recusados explicitamente, inclusive se credenciais PIX forem informadas; não marque faturas como pagas nem considere um repasse concluído fora de uma integração real.
 
 ### Instalação
 
@@ -53,7 +53,7 @@ O sistema também não integra um provedor PIX transacional nem concilia pagamen
    sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
    ```
 
-   Altere `app.example.com` no Caddyfile para o domínio apontado para a VPS. A configuração do Caddy termina TLS automaticamente. Libere no firewall apenas SSH e HTTP/HTTPS; a aplicação deve permanecer em `127.0.0.1:3000`.
+   `app.example.com` é apenas um exemplo: substitua pelo domínio real, com DNS apontado para a VPS, tanto no Caddyfile quanto em `CORS_ALLOWED_ORIGINS`. A configuração do Caddy termina TLS automaticamente. Libere no firewall apenas SSH e HTTP/HTTPS; o serviço fixa `NODE_ENV=production` e mantém a aplicação em `127.0.0.1:3000`. A API rejeita origens não autorizadas em operações que alteram dados e envia cabeçalhos HTTP de segurança.
 
 6. Inicie e verifique o serviço:
 

@@ -52,9 +52,26 @@ interface LoginAttempt {
   blockedUntil: number;
 }
 const loginAttempts = new Map<string, LoginAttempt>();
+const pairingAttempts = new Map<string, LoginAttempt>();
+const MAX_TRACKED_ATTEMPTS = 10_000;
+
+function pruneAttempts(attempts: Map<string, LoginAttempt>, windowMs: number, now: number): void {
+  for (const [key, attempt] of attempts) {
+    if (attempt.firstAttempt + windowMs <= now && attempt.blockedUntil <= now) {
+      attempts.delete(key);
+    }
+  }
+
+  while (attempts.size > MAX_TRACKED_ATTEMPTS) {
+    const oldestKey = attempts.keys().next().value;
+    if (oldestKey === undefined) break;
+    attempts.delete(oldestKey);
+  }
+}
 
 export function checkLoginRateLimit(key: string): { allowed: boolean; retryAfterSec?: number } {
   const now = Date.now();
+  pruneAttempts(loginAttempts, 15 * 60 * 1000, now);
   const attempt = loginAttempts.get(key);
   if (!attempt) return { allowed: true };
 
@@ -74,6 +91,7 @@ export function checkLoginRateLimit(key: string): { allowed: boolean; retryAfter
 
 export function recordFailedLogin(key: string): void {
   const now = Date.now();
+  pruneAttempts(loginAttempts, 15 * 60 * 1000, now);
   const attempt = loginAttempts.get(key) || { count: 0, firstAttempt: now, blockedUntil: 0 };
   attempt.count += 1;
 
@@ -89,10 +107,9 @@ export function resetLoginRateLimit(key: string): void {
 }
 
 // Pairing Rate Limiting (Brute-force protection on 6-digit codes)
-const pairingAttempts = new Map<string, LoginAttempt>();
-
 export function checkPairingRateLimit(key: string): { allowed: boolean; retryAfterSec?: number } {
   const now = Date.now();
+  pruneAttempts(pairingAttempts, 10 * 60 * 1000, now);
   const attempt = pairingAttempts.get(key);
   if (!attempt) return { allowed: true };
 
@@ -111,6 +128,7 @@ export function checkPairingRateLimit(key: string): { allowed: boolean; retryAft
 
 export function recordFailedPairing(key: string): void {
   const now = Date.now();
+  pruneAttempts(pairingAttempts, 10 * 60 * 1000, now);
   const attempt = pairingAttempts.get(key) || { count: 0, firstAttempt: now, blockedUntil: 0 };
   attempt.count += 1;
 
@@ -142,14 +160,19 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   if (token) {
     const session = storage.getSession(token);
     if (session) {
-      req.user = {
-        id: session.userId,
-        email: session.userEmail,
-        name: session.userName,
-        role: session.role,
-        organizationId: session.organizationId,
-      };
-      req.sessionToken = token;
+      const user = storage.getUserById(session.userId);
+      if (user?.status === 'active') {
+        req.user = {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          organizationId: user.organizationId,
+        };
+        req.sessionToken = token;
+      } else {
+        storage.deleteSession(token);
+      }
     }
   }
 
