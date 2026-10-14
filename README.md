@@ -17,7 +17,7 @@ Em desenvolvimento, o sistema cria dados demonstrativos em `data/velomedia_store
 
 A implantação suportada neste repositório é uma única instância Node.js com persistência JSON em disco local. O arquivo deve ficar em um volume persistente e ser incluído em backups. Esta implementação não conecta ao PostgreSQL: `server/db/schema.sql` e `server/repository.ts` ainda não são usados pela API. Não execute múltiplas instâncias nem coloque os dados em um disco efêmero ou compartilhado; o armazenamento JSON síncrono é destinado a instalações pequenas e não oferece alta disponibilidade.
 
-O sistema também não integra um provedor PIX transacional nem concilia pagamentos por webhook. Cobranças são recusadas explicitamente, inclusive se credenciais PIX forem informadas; não use a resposta de cobrança como confirmação de pagamento.
+O sistema também não integra um provedor PIX transacional nem concilia pagamentos por webhook ou repasses. Cobranças, webhooks de pagamento e repasses são recusados explicitamente, inclusive se credenciais PIX forem informadas; não marque faturas como pagas nem considere um repasse concluído fora de uma integração real.
 
 ### Instalação
 

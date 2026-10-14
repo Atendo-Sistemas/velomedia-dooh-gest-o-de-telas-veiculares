@@ -734,12 +734,12 @@ apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, (req
 // ============================================================================
 // 11. ADVERTISERS & INVOICES (Strict Multi-Tenant Isolation)
 // ============================================================================
-apiRouter.get('/advertisers', requireAuth, (req: Request, res: Response) => {
+apiRouter.get('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   res.json(storage.getAdvertisers(tenantId));
 });
 
-apiRouter.post('/advertisers', requireAuth, validateBody(AdvertiserSchema), (req: Request, res: Response) => {
+apiRouter.post('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), validateBody(AdvertiserSchema), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   const saved = storage.saveAdvertiser(req.body as AdvertiserAccount, tenantId);
   if (!saved) {
@@ -748,7 +748,7 @@ apiRouter.post('/advertisers', requireAuth, validateBody(AdvertiserSchema), (req
   res.status(201).json(saved);
 });
 
-apiRouter.delete('/advertisers/:id', requireAuth, (req: Request, res: Response) => {
+apiRouter.delete('/advertisers/:id', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   const deleted = storage.deleteAdvertiser(req.params.id, tenantId);
   if (!deleted) {
@@ -757,7 +757,7 @@ apiRouter.delete('/advertisers/:id', requireAuth, (req: Request, res: Response) 
   res.json({ success: true });
 });
 
-apiRouter.get('/invoices', requireAuth, (req: Request, res: Response) => {
+apiRouter.get('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'financial_auditor']), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   res.json(storage.getInvoices(tenantId));
 });

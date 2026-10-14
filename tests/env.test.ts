@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateEnvironment } from '../server/env';
+import { InvoiceSchema, OrganizationSchema } from '../server/schemas';
 
 const validProductionEnv: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
@@ -17,6 +18,22 @@ describe('production environment validation', () => {
       valid: true,
       missing: [],
       errors: [],
+    });
+
+    describe('API write schemas', () => {
+      it('rejects malformed organizations and negative invoice amounts', () => {
+        expect(OrganizationSchema.safeParse({ id: 'org_invalid', adminUser: {} }).success).toBe(false);
+        expect(InvoiceSchema.safeParse({
+          id: 'inv_1',
+          invoiceNumber: 'INV-1',
+          issueDate: '2026-10-14',
+          dueDate: '2026-10-30',
+          amount: -1,
+          status: 'pending',
+          screensBilled: 1,
+          paymentMethod: 'pix',
+        }).success).toBe(false);
+      });
     });
   });
 

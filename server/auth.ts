@@ -160,14 +160,19 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   if (token) {
     const session = storage.getSession(token);
     if (session) {
-      req.user = {
-        id: session.userId,
-        email: session.userEmail,
-        name: session.userName,
-        role: session.role,
-        organizationId: session.organizationId,
-      };
-      req.sessionToken = token;
+      const user = storage.getUserById(session.userId);
+      if (user?.status === 'active') {
+        req.user = {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          organizationId: user.organizationId,
+        };
+        req.sessionToken = token;
+      } else {
+        storage.deleteSession(token);
+      }
     }
   }
 
