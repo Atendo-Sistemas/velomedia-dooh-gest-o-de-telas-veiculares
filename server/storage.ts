@@ -1160,7 +1160,7 @@ export class VeloStorage {
   // --- AUDIT LOGS ---
   public logAudit(log: Omit<AuditLog, 'id' | 'createdAt'>): void {
     const record: AuditLog = {
-      id: `audit_${Date.now()}_${fs.randomBytes(4).toString('hex')}`,
+      id: `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
       createdAt: new Date().toISOString(),
       ...log,
     };

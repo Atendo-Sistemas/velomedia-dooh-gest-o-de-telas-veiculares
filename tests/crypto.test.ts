@@ -7,7 +7,7 @@ import {
   generatePairingCode, 
   generateDeviceSecret 
 } from '../server/crypto';
-import { generatePixEmvPayload } from '../server/billing';
+import { generatePixEmvPayload, VeloPixGatewayAdapter } from '../server/billing';
 import { VeloStorage } from '../server/storage';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -75,6 +75,38 @@ describe('VeloMedia DOOH Cryptographic Engine', () => {
     expect(payload).toContain('5490.00');
     expect(payload).toContain('SAO PAULO');
     expect(payload).toHaveLength(payload.lastIndexOf('6304') + 8);
+  });
+
+  it('should not report PIX charges as created without a real provider integration', async () => {
+    const previousEnv = {
+      NODE_ENV: process.env.NODE_ENV,
+      PIX_CLIENT_ID: process.env.PIX_CLIENT_ID,
+      PIX_CLIENT_SECRET: process.env.PIX_CLIENT_SECRET,
+      PIX_KEY: process.env.PIX_KEY,
+      WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+    };
+
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.PIX_CLIENT_ID = 'configured-client';
+      process.env.PIX_CLIENT_SECRET = 'configured-secret';
+      process.env.PIX_KEY = 'pix@example.com';
+      process.env.WEBHOOK_SECRET = 'configured-webhook-secret';
+
+      const result = await new VeloPixGatewayAdapter().createPixCharge({
+        invoiceId: 'invoice-test',
+        amount: 10,
+        organizationName: 'Test',
+        description: 'Test charge',
+      });
+
+      expect(result.status).toBe('payment_provider_not_configured');
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 

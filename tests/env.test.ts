@@ -30,7 +30,7 @@ describe('production environment validation', () => {
     });
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toHaveLength(4);
+    expect(result.errors).toHaveLength(5);
   });
 
   it('requires the production bootstrap and persistence settings', () => {

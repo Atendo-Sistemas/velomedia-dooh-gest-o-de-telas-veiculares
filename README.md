@@ -7,7 +7,7 @@ Painel web e API para gestão de telas veiculares. O backend e o frontend são c
 Requisitos: Node.js 22 ou superior e npm.
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
@@ -68,7 +68,7 @@ O sistema também não integra um provedor PIX transacional nem concilia pagamen
 
 ### Atualização e backups
 
-Faça backup de `DATA_FILE_PATH` antes de cada atualização. Pare o serviço, atualize o código, execute `npm install` e `npm run build`, depois inicie o serviço novamente. Teste periodicamente a restauração do backup. A troca da senha inicial no arquivo de ambiente não redefine senhas existentes.
+Faça backup de `DATA_FILE_PATH` antes de cada atualização. Pare o serviço, atualize o código, execute `npm ci` e `npm run build`, depois inicie o serviço novamente. Teste periodicamente a restauração do backup. A troca da senha inicial no arquivo de ambiente não redefine senhas existentes.
 
 ## Comandos
 
