@@ -19,22 +19,6 @@ describe('production environment validation', () => {
       missing: [],
       errors: [],
     });
-
-    describe('API write schemas', () => {
-      it('rejects malformed organizations and negative invoice amounts', () => {
-        expect(OrganizationSchema.safeParse({ id: 'org_invalid', adminUser: {} }).success).toBe(false);
-        expect(InvoiceSchema.safeParse({
-          id: 'inv_1',
-          invoiceNumber: 'INV-1',
-          issueDate: '2026-10-14',
-          dueDate: '2026-10-30',
-          amount: -1,
-          status: 'pending',
-          screensBilled: 1,
-          paymentMethod: 'pix',
-        }).success).toBe(false);
-      });
-    });
   });
 
   it('rejects wildcard CORS, weak secrets, and non-persistent relative paths', () => {
@@ -73,5 +57,21 @@ describe('production environment validation', () => {
     expect(result.valid).toBe(false);
     expect(result.errors).toContain('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
     expect(result.errors).toContain('HOST deve ser localhost ou um endereço de loopback em produção.');
+  });
+});
+
+describe('API write schemas', () => {
+  it('rejects malformed organizations and negative invoice amounts', () => {
+    expect(OrganizationSchema.safeParse({ id: 'org_invalid', adminUser: {} }).success).toBe(false);
+    expect(InvoiceSchema.safeParse({
+      id: 'inv_1',
+      invoiceNumber: 'INV-1',
+      issueDate: '2026-10-14',
+      dueDate: '2026-10-30',
+      amount: -1,
+      status: 'pending',
+      screensBilled: 1,
+      paymentMethod: 'pix',
+    }).success).toBe(false);
   });
 });
