@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { randomInt, randomUUID } from 'node:crypto';
 import { storage } from './storage';
 import { 
   verifyPassword, 
@@ -18,7 +19,10 @@ import {
   COOKIE_OPTIONS,
   checkLoginRateLimit,
   recordFailedLogin,
-  resetLoginRateLimit
+  resetLoginRateLimit,
+  checkPairingRateLimit,
+  recordFailedPairing,
+  resetPairingRateLimit
 } from './auth';
 import { 
   LoginSchema, 
@@ -30,6 +34,10 @@ import {
   ProofOfPlaySubmissionSchema, 
   TelemetryHeartbeatSchema,
   RemoteCommandSchema,
+  OrganizationSchema,
+  PairingTokenRequestSchema,
+  AdvertiserSchema,
+  InvoiceSchema,
   validateBody
 } from './schemas';
 import { pixGateway } from './billing';
@@ -153,7 +161,7 @@ apiRouter.get('/organizations', requireAuth, (req: Request, res: Response) => {
   res.json(userOrg ? [userOrg] : []);
 });
 
-apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
+apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), (req: Request, res: Response) => {
   storage.saveOrganization(req.body);
   storage.logAudit({
     organizationId: req.body.id,
@@ -167,7 +175,10 @@ apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'su
   res.status(201).json(req.body);
 });
 
-apiRouter.put('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
+apiRouter.put('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), (req: Request, res: Response) => {
+  if (req.params.id !== req.body.id) {
+    return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID da organização.' });
+  }
   storage.saveOrganization(req.body);
   res.json(req.body);
 });
@@ -217,33 +228,11 @@ apiRouter.delete('/drivers/:id', requireAuth, (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
-apiRouter.post('/drivers/:id/payout', requireAuth, requireRole(['platform_admin', 'super_admin', 'operator']), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const driver = storage.getDriverById(req.params.id, tenantId);
-  if (!driver) {
-    return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado.' });
-  }
-
-  const payoutAmount = driver.pendingBalance;
-  if (payoutAmount <= 0) {
-    return res.status(400).json({ error: 'no_balance', message: 'Sem saldo pendente para repasse.' });
-  }
-
-  driver.pendingBalance = 0;
-  storage.saveDriver(driver, tenantId);
-
-  storage.logAudit({
-    organizationId: tenantId,
-    userId: req.user!.id,
-    userEmail: req.user!.email,
-    action: 'DRIVER_PIX_PAYOUT',
-    resource: 'drivers',
-    resourceId: driver.id,
-    details: { amount: payoutAmount, pixKey: driver.pixKey },
-    ipAddress: req.ip,
+apiRouter.post('/drivers/:id/payout', requireAuth, requireRole(['platform_admin', 'super_admin', 'operator']), (_req: Request, res: Response) => {
+  res.status(503).json({
+    error: 'payment_provider_not_configured',
+    message: 'Repasses PIX não podem ser processados até que um provedor transacional seja integrado.',
   });
-
-  res.json({ success: true, paidAmount: payoutAmount });
 });
 
 // ============================================================================
@@ -286,15 +275,19 @@ apiRouter.delete('/devices/:id', requireAuth, (req: Request, res: Response) => {
 /**
  * Generate 6-digit pairing code for in-car tablet
  */
-apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), (req: Request, res: Response) => {
+apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), validateBody(PairingTokenRequestSchema), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
+  const driverId = req.body.driverId || '';
+  if (driverId && !storage.getDriverById(driverId, tenantId)) {
+    return res.status(404).json({ error: 'driver_not_found', message: 'Motorista não encontrado neste tenant.' });
+  }
   const code = generatePairingCode();
   const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
   storage.createPairingToken({
     token: code,
     organizationId: tenantId,
-    driverId: req.body.driverId || '',
+    driverId,
     screenPosition: req.body.screenPosition || 'headrest_right',
     hardwareOwnership: req.body.hardwareOwnership || 'driver_byod',
     expiresAt,
@@ -315,19 +308,30 @@ apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_adm
  */
 apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: Request, res: Response): void => {
   const { pairingCode, model, serialNumber, screenPosition, hardwareOwnership } = req.body;
+  const ip = req.ip || 'unknown-ip';
+  const rateLimit = checkPairingRateLimit(ip);
+  if (!rateLimit.allowed) {
+    res.status(429).json({
+      error: 'too_many_attempts',
+      message: `Muitas tentativas de pareamento. Tente novamente em ${rateLimit.retryAfterSec} segundos.`,
+    });
+    return;
+  }
 
   const tokenRecord = storage.getPairingToken(pairingCode);
   if (!tokenRecord) {
+    recordFailedPairing(ip);
     res.status(400).json({ error: 'invalid_code', message: 'Código de pareamento inválido ou expirado.' });
     return;
   }
 
+  resetPairingRateLimit(ip);
   storage.markPairingTokenUsed(pairingCode);
 
   const orgId = tokenRecord.organizationId;
   const driver = tokenRecord.driverId ? storage.getDriverById(tokenRecord.driverId, orgId) : undefined;
-  const deviceId = `dev_${Date.now().toString(36)}`;
-  const deviceCode = `TV-${orgId.substring(0, 4).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const deviceId = `dev_${randomUUID()}`;
+  const deviceCode = `TV-${orgId.substring(0, 4).toUpperCase()}-${randomInt(1000, 10000)}`;
   const deviceSecret = generateDeviceSecret();
 
   const newDevice: Device = {
@@ -735,7 +739,7 @@ apiRouter.get('/advertisers', requireAuth, (req: Request, res: Response) => {
   res.json(storage.getAdvertisers(tenantId));
 });
 
-apiRouter.post('/advertisers', requireAuth, (req: Request, res: Response) => {
+apiRouter.post('/advertisers', requireAuth, validateBody(AdvertiserSchema), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   const saved = storage.saveAdvertiser(req.body as AdvertiserAccount, tenantId);
   if (!saved) {
@@ -758,7 +762,7 @@ apiRouter.get('/invoices', requireAuth, (req: Request, res: Response) => {
   res.json(storage.getInvoices(tenantId));
 });
 
-apiRouter.post('/invoices', requireAuth, (req: Request, res: Response) => {
+apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), validateBody(InvoiceSchema), (req: Request, res: Response) => {
   const tenantId = resolveTenant(req);
   const saved = storage.saveInvoice(req.body as SaaSInvoice, tenantId);
   if (!saved) {
@@ -808,35 +812,11 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, async (req: Request, res
 /**
  * Webhook callback with signature verification & deduplication
  */
-apiRouter.post('/webhooks/pix', (req: Request, res: Response) => {
-  const signature = req.headers['x-webhook-signature'] as string || '';
-  const rawBody = JSON.stringify(req.body);
-
-  const result = pixGateway.processWebhookEvent(rawBody, signature);
-  if (!result.success) {
-    return res.status(401).json({ error: 'invalid_signature', message: result.reason });
-  }
-
-  if (result.duplicate) {
-    return res.json({ status: 'ignored_duplicate' });
-  }
-
-  // Update invoice if matched
-  const event = result.event;
-  if (event?.invoiceId && event?.status === 'paid') {
-    const orgs = storage.getOrganizations();
-    for (const org of orgs) {
-      const inv = storage.getInvoiceById(event.invoiceId, org.id);
-      if (inv) {
-        inv.status = 'paid';
-        inv.paidAt = new Date().toISOString();
-        storage.saveInvoice(inv, org.id);
-        break;
-      }
-    }
-  }
-
-  res.json({ status: 'processed' });
+apiRouter.post('/webhooks/pix', (_req: Request, res: Response) => {
+  res.status(503).json({
+    error: 'payment_provider_not_configured',
+    message: 'Webhooks de pagamento estão desativados até que um provedor transacional seja integrado.',
+  });
 });
 
 // ============================================================================
