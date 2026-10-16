@@ -44,6 +44,7 @@ import {
 import { pixGateway } from './billing';
 import {
   adminRequestRateLimiter,
+  asaasWebhookRateLimiter,
   commandAckRateLimiter,
   deviceRequestRateLimiter,
   loginRequestRateLimiter,
@@ -879,7 +880,7 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_a
 /**
  * Asaas webhook authenticated with the dedicated notification token.
  */
-apiRouter.post('/webhooks/asaas', async (req: Request, res: Response) => {
+apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, res: Response) => {
   if (!pixGateway.verifyAsaasWebhookToken(req.get('asaas-access-token'))) {
     return res.status(401).json({ error: 'invalid_webhook_token' });
   }

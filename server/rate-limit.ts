@@ -48,6 +48,12 @@ export const adminRequestRateLimiter = createRateLimiter(
   request => request.user?.id ? `user:${request.user.id}` : getIpKey(request),
 );
 
+export const asaasWebhookRateLimiter = createRateLimiter(
+  60_000,
+  600,
+  'Muitas notificações de pagamento. Aguarde um instante e tente novamente.',
+);
+
 export const commandAckRateLimiter = createRateLimiter(
   60_000,
   120,
