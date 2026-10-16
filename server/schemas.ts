@@ -301,6 +301,7 @@ export const InvoiceSchema = z.object({
   pixQrCode: z.string().optional(),
   pdfDownloadUrl: z.string().optional(),
   txid: z.string().optional(),
+  pixQrCodeExpiresAt: z.string().optional(),
   paidAt: z.string().optional(),
 });
 

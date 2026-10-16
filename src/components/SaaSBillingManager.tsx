@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Building2, 
   CreditCard, 
@@ -19,12 +19,12 @@ import {
   Clock, 
   Copy,
   Receipt,
-  Download,
   AlertCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { SaaSPlan, SaaSOrganization, SaaSInvoice, AdvertiserClientPortal, SaaSPlanTier } from '../types';
-import { SAAS_PLANS, INITIAL_ORGANIZATIONS, INITIAL_INVOICES, INITIAL_ADVERTISER_PORTALS } from '../data/mockData';
+import { SAAS_PLANS, INITIAL_ADVERTISER_PORTALS } from '../data/mockData';
+import { apiClient } from '../services/apiClient';
 
 interface SaaSBillingManagerProps {
   currentOrg: SaaSOrganization;
@@ -39,7 +39,10 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
   onSwitchOrg,
   organizations,
 }) => {
-  const [invoices, setInvoices] = useState<SaaSInvoice[]>(INITIAL_INVOICES);
+  const [invoices, setInvoices] = useState<SaaSInvoice[]>([]);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
+  const [isCreatingPix, setIsCreatingPix] = useState(false);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [advertisers, setAdvertisers] = useState<AdvertiserClientPortal[]>(INITIAL_ADVERTISER_PORTALS);
   const [selectedPlanTier, setSelectedPlanTier] = useState<SaaSPlanTier>(currentOrg.planTier);
   const [showPixModal, setShowPixModal] = useState<SaaSInvoice | null>(null);
@@ -50,6 +53,23 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
   const [newAdvBudget, setNewAdvBudget] = useState(5000);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const refreshInvoices = async () => {
+    setInvoiceError(null);
+    try {
+      const result = await apiClient.getInvoices();
+      setInvoices(result);
+      setShowPixModal(current => current ? result.find(invoice => invoice.id === current.id) || current : null);
+    } catch (error) {
+      setInvoiceError(error instanceof Error ? error.message : 'Não foi possível carregar as faturas.');
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshInvoices();
+  }, []);
 
   // Upgrade Plan handler
   const handleUpgradePlan = (plan: SaaSPlan) => {
@@ -67,13 +87,26 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Pay invoice via PIX
-  const handlePayInvoice = (inv: SaaSInvoice) => {
-    setInvoices(invoices.map(i => i.id === inv.id ? { ...i, status: 'paid' } : i));
-    setShowPixModal(null);
-    confetti({ particleCount: 60, spread: 80 });
-    setToastMessage(`Fatura ${inv.invoiceNumber} quitada com sucesso via PIX!`);
-    setTimeout(() => setToastMessage(null), 3500);
+  const handleGeneratePix = async (invoice: SaaSInvoice) => {
+    if (isCreatingPix) return;
+    setIsCreatingPix(true);
+    setInvoiceError(null);
+    try {
+      const charge = await apiClient.chargeInvoicePix(invoice.id);
+      const updated = {
+        ...invoice,
+        txid: charge.txid,
+        pixQrCode: charge.copiaECola,
+        pixQrCodeUrl: charge.qrCodeUrl,
+        pixQrCodeExpiresAt: charge.expiresAt,
+      };
+      setInvoices(current => current.map(item => item.id === updated.id ? updated : item));
+      setShowPixModal(updated);
+    } catch (error) {
+      setInvoiceError(error instanceof Error ? error.message : 'Não foi possível gerar a cobrança PIX.');
+    } finally {
+      setIsCreatingPix(false);
+    }
   };
 
   // Add new advertiser portal
@@ -397,10 +430,23 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
             <Receipt className="w-5 h-5 text-cyan-400" />
             <h2 className="text-lg font-bold text-white tracking-tight">Faturas da Licença SaaS</h2>
           </div>
-          <span className="text-xs text-slate-400 font-mono">
-            Pagamentos via PIX ou Cartão de Crédito
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-400 font-mono">Cobranças via PIX (Asaas)</span>
+            <button
+              onClick={() => void refreshInvoices()}
+              disabled={isLoadingInvoices}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-semibold"
+            >
+              Atualizar
+            </button>
+          </div>
         </div>
+
+        {invoiceError && (
+          <div className="rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200" role="alert">
+            {invoiceError}
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -431,6 +477,11 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
                         <CheckCircle2 className="w-3 h-3" />
                         <span>PAGO</span>
                       </span>
+                    ) : inv.status === 'overdue' ? (
+                      <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                        <AlertCircle className="w-3 h-3" />
+                        <span>VENCIDO</span>
+                      </span>
                     ) : (
                       <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         <Clock className="w-3 h-3" />
@@ -439,28 +490,29 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
                     )}
                   </td>
                   <td className="py-3.5 px-4 text-right">
-                    {inv.status === 'pending' ? (
+                    {inv.status !== 'paid' ? (
                       <button
                         onClick={() => setShowPixModal(inv)}
                         className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-lg text-xs shadow-md transition"
                       >
-                        Pagar via PIX
+                        {inv.txid ? 'Ver PIX' : 'Gerar PIX'}
                       </button>
                     ) : (
-                      <button
-                        onClick={() => {
-                          setToastMessage(`Recibo da fatura ${inv.invoiceNumber} baixado com sucesso!`);
-                          setTimeout(() => setToastMessage(null), 3000);
-                        }}
-                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center space-x-1 ml-auto"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Recibo PDF</span>
-                      </button>
+                      <span className="text-xs text-emerald-300">Pago confirmado</span>
                     )}
                   </td>
                 </tr>
               ))}
+              {!isLoadingInvoices && invoices.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-xs text-slate-400">Nenhuma fatura cadastrada para esta organização.</td>
+                </tr>
+              )}
+              {isLoadingInvoices && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-xs text-slate-400">Carregando faturas…</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -482,21 +534,38 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
             </div>
 
             <div className="bg-white p-4 rounded-2xl mx-auto inline-block shadow">
-              <div className="w-40 h-40 bg-slate-950 p-2 rounded-xl flex items-center justify-center flex-col space-y-1">
-                <QrCode className="w-28 h-28 text-emerald-400" />
-                <span className="text-[9px] text-slate-400 font-mono">BANCO CENTRAL PIX</span>
-              </div>
+              {showPixModal.pixQrCodeUrl?.startsWith('data:image/png;base64,') ? (
+                <img src={showPixModal.pixQrCodeUrl} alt="QR Code de pagamento PIX Asaas" className="w-40 h-40" />
+              ) : (
+                <div className="w-40 h-40 bg-slate-950 p-2 rounded-xl flex items-center justify-center text-center">
+                  <span className="text-xs text-slate-400">Gere a cobrança para obter o QR Code PIX.</span>
+                </div>
+              )}
             </div>
 
             <div className="text-xl font-black text-emerald-400 font-mono">
               R$ {showPixModal.amount.toFixed(2)}
             </div>
 
+            {showPixModal.status === 'paid' && (
+              <p className="text-sm font-semibold text-emerald-300">Pagamento confirmado pelo Asaas.</p>
+            )}
+            {invoiceError && (
+              <p className="rounded-lg border border-rose-500/30 bg-rose-950/40 p-2 text-xs text-rose-200" role="alert">
+                {invoiceError}
+              </p>
+            )}
+
             <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700 text-left space-y-1">
               <span className="text-[10px] text-slate-400 block font-semibold">Código PIX Copia e Cola:</span>
-              <div className="font-mono text-[11px] text-slate-300 truncate select-all">
-                00020126580014br.gov.bcb.pix0136velomedia-faturamento-saas-2026-sp
+              <div className="font-mono text-[11px] text-slate-300 break-all select-all">
+                {showPixModal.pixQrCode || 'O código será exibido após a criação da cobrança.'}
               </div>
+              {showPixModal.pixQrCodeExpiresAt && (
+                <span className="block text-[10px] text-slate-400">
+                  Expira em {new Date(showPixModal.pixQrCodeExpiresAt).toLocaleString('pt-BR')}
+                </span>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2 pt-2">
@@ -504,15 +573,32 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
                 onClick={() => setShowPixModal(null)}
                 className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs"
               >
-                Cancelar
+                Fechar
               </button>
               <button
-                onClick={() => handlePayInvoice(showPixModal)}
-                className="py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow-md"
+                onClick={() => showPixModal.status === 'paid'
+                  ? setShowPixModal(null)
+                  : showPixModal.txid
+                  ? void refreshInvoices()
+                  : void handleGeneratePix(showPixModal)}
+                disabled={isCreatingPix || isLoadingInvoices}
+                className="py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-md"
               >
-                Confirmar Pagamento PIX
+                {isCreatingPix ? 'Gerando cobrança…' : showPixModal.status === 'paid' ? 'Concluir' : showPixModal.txid ? 'Verificar pagamento' : 'Gerar cobrança PIX'}
               </button>
             </div>
+            {showPixModal.pixQrCode && (
+              <button
+                onClick={() => copyToClipboard(showPixModal.pixQrCode!, 'pix')}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-2"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                {copiedCode === 'pix' ? 'Código copiado' : 'Copiar código PIX'}
+              </button>
+            )}
+            <p className="text-[11px] text-slate-400">
+              A fatura só muda para paga após a confirmação enviada pelo Asaas.
+            </p>
           </div>
         </div>
       )}

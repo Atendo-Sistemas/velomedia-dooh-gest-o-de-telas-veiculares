@@ -72,6 +72,7 @@ export interface SaaSInvoice {
   pixQrCode?: string;
   pdfDownloadUrl?: string;
   txid?: string;
+  pixQrCodeExpiresAt?: string;
   paidAt?: string;
 }
 

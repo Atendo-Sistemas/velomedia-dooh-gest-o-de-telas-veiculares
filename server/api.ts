@@ -799,7 +799,19 @@ apiRouter.get('/invoices', requireAuth, requireRole(['platform_admin', 'super_ad
 
 apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), validateBody(InvoiceSchema), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
-  const saved = await repository.saveInvoice(req.body as SaaSInvoice, tenantId);
+  const invoice = req.body as SaaSInvoice;
+  if (invoice.status !== 'pending') {
+    return res.status(400).json({ error: 'invalid_invoice_status', message: 'Uma fatura nova deve iniciar como pendente.' });
+  }
+  if (await repository.getInvoiceById(invoice.id, tenantId)) {
+    return res.status(409).json({ error: 'invoice_exists', message: 'Já existe uma fatura com este identificador.' });
+  }
+  invoice.txid = undefined;
+  invoice.pixQrCode = undefined;
+  invoice.pixQrCodeUrl = undefined;
+  invoice.pixQrCodeExpiresAt = undefined;
+  invoice.paidAt = undefined;
+  const saved = await repository.saveInvoice(invoice, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Fatura já existe em outro tenant.' });
   }
@@ -849,6 +861,7 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_a
   invoice.txid = result.txid;
   invoice.pixQrCode = result.copiaECola;
   invoice.pixQrCodeUrl = result.qrCodeUrl;
+  invoice.pixQrCodeExpiresAt = result.expiresAt;
   const saved = await repository.saveInvoice(invoice, tenantId);
   if (!saved) {
     return res.status(500).json({ error: 'payment_record_failed', message: 'A cobrança foi criada, mas não foi possível salvar os dados da fatura.' });
