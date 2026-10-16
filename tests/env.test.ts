@@ -6,7 +6,7 @@ const validProductionEnv: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   WEBHOOK_SECRET: 'a'.repeat(64),
   CORS_ALLOWED_ORIGINS: 'https://app.example.com',
-  DATA_FILE_PATH: '/var/lib/velomedia/data.json',
+  DATABASE_URL: 'postgresql://db.example.com:5432/velomedia',
   INITIAL_ADMIN_EMAIL: 'admin@example.com',
   INITIAL_ADMIN_PASSWORD: 'a-long-test-password',
   PORT: '3000',
@@ -21,12 +21,12 @@ describe('production environment validation', () => {
     });
   });
 
-  it('rejects wildcard CORS, weak secrets, and non-persistent relative paths', () => {
+  it('rejects wildcard CORS, weak secrets, and malformed database URLs', () => {
     const result = validateEnvironment({
       ...validProductionEnv,
       WEBHOOK_SECRET: 'short',
       INITIAL_ADMIN_PASSWORD: 'short',
-      DATA_FILE_PATH: 'data.json',
+      DATABASE_URL: 'not-a-postgres-url',
       CORS_ALLOWED_ORIGINS: '*',
     });
 
@@ -41,22 +41,25 @@ describe('production environment validation', () => {
     expect(result.missing).toEqual([
       'WEBHOOK_SECRET',
       'CORS_ALLOWED_ORIGINS',
-      'DATA_FILE_PATH',
+      'DATABASE_URL',
       'INITIAL_ADMIN_EMAIL',
       'INITIAL_ADMIN_PASSWORD',
     ]);
   });
 
-  it('rejects non-loopback binds and storage paths outside the persistent data directory', () => {
+  it('rejects non-loopback binds in production', () => {
     const result = validateEnvironment({
       ...validProductionEnv,
       HOST: '0.0.0.0',
-      DATA_FILE_PATH: '/tmp/velomedia.json',
     });
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
     expect(result.errors).toContain('HOST deve ser localhost ou um endereço de loopback em produção.');
+  });
+
+  it('requires PostgreSQL rather than JSON persistence in production', () => {
+    const { DATABASE_URL: _databaseUrl, ...withoutDatabase } = validProductionEnv;
+    expect(validateEnvironment(withoutDatabase).missing).toContain('DATABASE_URL');
   });
 
   it('allows a Docker-internal bind only when the container deployment flag is set', () => {

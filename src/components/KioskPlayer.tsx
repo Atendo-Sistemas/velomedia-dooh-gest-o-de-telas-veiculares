@@ -149,7 +149,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
   const eligibleCampaigns = campaigns.filter((c) => isCampaignEligible(c, device, geoFences));
   const activeCampaignList = eligibleCampaigns;
 
-  const currentCampaign = activeCampaignList[currentCampaignIndex % activeCampaignList.length] || campaigns[0];
+  const currentCampaign = activeCampaignList[currentCampaignIndex % activeCampaignList.length] || (simplified ? undefined : campaigns[0]);
 
   useEffect(() => {
     const value = currentCampaign?.creative.qrCodeUrl || currentCampaign?.creative.couponCode || '';

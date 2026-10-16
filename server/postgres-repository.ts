@@ -305,7 +305,7 @@ export class PostgresRepository implements VeloRepository {
     return result;
   }
   async recordProofOfPlayAndReplay(log: ProofOfPlayLog, orgId: string): Promise<boolean> {
-    if (log.organizationId && log.organizationId !== orgId) return false;
+    if (!log.nonce || (log.organizationId && log.organizationId !== orgId)) return false;
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
