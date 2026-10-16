@@ -69,7 +69,7 @@ O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de m�
     "location": { "lat": -23.5505, "lng": -46.6333 },
     "speedKmH": 28.4,
     "nonce": "c4ca4238a0b923820dcc509a6f75849b",
-    "playerVersion": "2.5.0-beta.2",
+    "playerVersion": "2.5.0-beta.3",
     "signature": "hmac_sha256_hex_string"
   }
   ```

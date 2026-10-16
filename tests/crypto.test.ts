@@ -77,21 +77,27 @@ describe('VeloMedia DOOH Cryptographic Engine', () => {
     expect(payload).toHaveLength(payload.lastIndexOf('6304') + 8);
   });
 
-  it('should not report PIX charges as created without a real provider integration', async () => {
+  it('does not enable PIX when only legacy generic gateway credentials are set', async () => {
     const previousEnv = {
       NODE_ENV: process.env.NODE_ENV,
+      PIX_GATEWAY_PROVIDER: process.env.PIX_GATEWAY_PROVIDER,
       PIX_CLIENT_ID: process.env.PIX_CLIENT_ID,
       PIX_CLIENT_SECRET: process.env.PIX_CLIENT_SECRET,
       PIX_KEY: process.env.PIX_KEY,
       WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+      ASAAS_API_KEY: process.env.ASAAS_API_KEY,
+      ASAAS_WEBHOOK_TOKEN: process.env.ASAAS_WEBHOOK_TOKEN,
     };
 
     try {
       process.env.NODE_ENV = 'production';
+      process.env.PIX_GATEWAY_PROVIDER = 'efi_bank';
       process.env.PIX_CLIENT_ID = 'configured-client';
       process.env.PIX_CLIENT_SECRET = 'configured-secret';
       process.env.PIX_KEY = 'pix@example.com';
       process.env.WEBHOOK_SECRET = 'configured-webhook-secret';
+      delete process.env.ASAAS_API_KEY;
+      delete process.env.ASAAS_WEBHOOK_TOKEN;
 
       const result = await new VeloPixGatewayAdapter().createPixCharge({
         invoiceId: 'invoice-test',

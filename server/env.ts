@@ -34,6 +34,21 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       errors.push('BYPASS_ENV_CHECK é proibido em ambiente de produção.');
     }
 
+    if (env.PIX_GATEWAY_PROVIDER === 'asaas') {
+      for (const name of ['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN']) {
+        if (!env[name]?.trim()) {
+          missing.push(name);
+          errors.push(`Variável obrigatória para Asaas '${name}' ausente ou vazia.`);
+        }
+      }
+      if (env.ASAAS_ENVIRONMENT && !['sandbox', 'production'].includes(env.ASAAS_ENVIRONMENT)) {
+        errors.push('ASAAS_ENVIRONMENT deve ser sandbox ou production.');
+      }
+      if (env.ASAAS_WEBHOOK_TOKEN && (env.ASAAS_WEBHOOK_TOKEN.length < 32 || env.ASAAS_WEBHOOK_TOKEN.length > 255 || /\s/.test(env.ASAAS_WEBHOOK_TOKEN))) {
+        errors.push('ASAAS_WEBHOOK_TOKEN deve ter entre 32 e 255 caracteres e não conter espaços.');
+      }
+    }
+
     const webhookSecret = env.WEBHOOK_SECRET?.trim();
     if (webhookSecret && webhookSecret.length < 32) {
       errors.push('WEBHOOK_SECRET deve conter no mínimo 32 caracteres.');

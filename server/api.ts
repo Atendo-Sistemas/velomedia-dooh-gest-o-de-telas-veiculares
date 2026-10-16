@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { getVeloRepository } from './repository';
 import { 
   verifyPassword, 
@@ -79,7 +79,7 @@ apiRouter.get('/health', async (_req: Request, res: Response) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.5.0-beta.2',
+    version: '2.5.0-beta.3',
     environment: process.env.NODE_ENV || 'production',
   });
 });
@@ -405,7 +405,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.5.0-beta.2',
+      appVersion: '2.5.0-beta.3',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
@@ -810,18 +810,30 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
  * PIX charge generation with provider check.
  * Section 11: If gateway is unconfigured, explicitly returns payment_provider_not_configured.
  */
-apiRouter.post('/invoices/:id/charge-pix', requireAuth, async (req: Request, res: Response) => {
+apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'financial_auditor']), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
   const invoice = await repository.getInvoiceById(req.params.id, tenantId);
   if (!invoice) {
     return res.status(404).json({ error: 'not_found', message: 'Fatura não encontrada.' });
   }
+  if (invoice.status === 'paid') {
+    return res.status(409).json({ error: 'invoice_already_paid', message: 'Esta fatura já foi paga.' });
+  }
+  const organization = await repository.getOrganizationById(tenantId);
+  if (!organization) {
+    return res.status(404).json({ error: 'organization_not_found', message: 'Organização da fatura não encontrada.' });
+  }
 
   const result = await pixGateway.createPixCharge({
     invoiceId: invoice.id,
+    organizationId: tenantId,
     amount: invoice.amount,
-    organizationName: invoice.organizationName,
+    organizationName: organization.name,
     description: `Fatura VeloMedia DOOH #${invoice.invoiceNumber}`,
+    dueDate: invoice.dueDate,
+    cnpj: organization.cnpj,
+    email: organization.billingEmail,
+    phone: organization.adminUser.phone,
   });
 
   if (result.status === 'payment_provider_not_configured') {
@@ -830,28 +842,87 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, async (req: Request, res
       message: result.error || 'Provedor de pagamentos PIX não está configurado neste ambiente.',
     });
   }
+  if (result.status === 'failed') {
+    return res.status(502).json({ error: 'payment_creation_failed', message: result.error });
+  }
 
   invoice.txid = result.txid;
   invoice.pixQrCode = result.copiaECola;
-  await repository.saveInvoice(invoice, tenantId);
+  invoice.pixQrCodeUrl = result.qrCodeUrl;
+  const saved = await repository.saveInvoice(invoice, tenantId);
+  if (!saved) {
+    return res.status(500).json({ error: 'payment_record_failed', message: 'A cobrança foi criada, mas não foi possível salvar os dados da fatura.' });
+  }
 
   res.json({
     success: true,
     txid: result.txid,
     copiaECola: result.copiaECola,
-    qrCodeSvg: result.qrCodeSvg,
+    qrCodeUrl: result.qrCodeUrl,
     expiresAt: result.expiresAt,
   });
 });
 
 /**
- * Webhook callback with signature verification & deduplication
+ * Asaas webhook authenticated with the dedicated notification token.
  */
-apiRouter.post('/webhooks/pix', (_req: Request, res: Response) => {
-  res.status(503).json({
-    error: 'payment_provider_not_configured',
-    message: 'Webhooks de pagamento estão desativados até que um provedor transacional seja integrado.',
-  });
+apiRouter.post('/webhooks/asaas', async (req: Request, res: Response) => {
+  if (!pixGateway.verifyAsaasWebhookToken(req.get('asaas-access-token'))) {
+    return res.status(401).json({ error: 'invalid_webhook_token' });
+  }
+  const event = req.body;
+  if (!event || typeof event.id !== 'string' || event.id.length > 128 || typeof event.event !== 'string') {
+    return res.status(400).json({ error: 'invalid_webhook_payload' });
+  }
+
+  try {
+    const payment = event.payment;
+    const paidEvents = new Set(['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED']);
+    const overdueEvents = new Set(['PAYMENT_OVERDUE']);
+    if (
+      payment &&
+      typeof payment.id === 'string' &&
+      typeof payment.externalReference === 'string' &&
+      (paidEvents.has(event.event) || overdueEvents.has(event.event))
+    ) {
+      const organizations = await repository.getOrganizations();
+      const matchingInvoices: Array<{ invoice: SaaSInvoice; organizationId: string }> = [];
+      for (const organization of organizations) {
+        const invoice = await repository.getInvoiceById(payment.externalReference, organization.id);
+        if (invoice && invoice.txid === payment.id && Number(payment.value) === invoice.amount) {
+          matchingInvoices.push({ invoice, organizationId: organization.id });
+        }
+      }
+      if (matchingInvoices.length > 1) {
+        return res.status(409).json({ error: 'ambiguous_invoice_reference' });
+      }
+      const match = matchingInvoices[0];
+      if (match) {
+        if (paidEvents.has(event.event) && match.invoice.status !== 'paid') {
+          match.invoice.status = 'paid';
+          match.invoice.paidAt = payment.paymentDate || payment.clientPaymentDate || new Date().toISOString();
+          if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
+            return res.status(500).json({ error: 'invoice_update_failed' });
+          }
+        } else if (overdueEvents.has(event.event) && match.invoice.status === 'pending') {
+          match.invoice.status = 'overdue';
+          if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
+            return res.status(500).json({ error: 'invoice_update_failed' });
+          }
+        }
+      }
+    }
+
+    const isNew = await repository.recordWebhook({
+      eventId: event.id,
+      provider: 'asaas',
+      processedAt: new Date().toISOString(),
+      payloadHash: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+    });
+    return res.json({ received: true, duplicate: !isNew });
+  } catch {
+    return res.status(500).json({ error: 'webhook_processing_failed' });
+  }
 });
 
 // ============================================================================

@@ -5,19 +5,19 @@ import { getVeloRepository } from './repository';
 export type InvoicePaymentStatus = 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded';
 
 export interface PixChargeResult {
-  status: 'created' | 'payment_provider_not_configured';
+  status: 'created' | 'payment_provider_not_configured' | 'failed';
   txid?: string;
   copiaECola?: string;
-  qrCodeSvg?: string;
+  qrCodeUrl?: string;
   expiresAt?: string;
   error?: string;
 }
 
 export interface PaymentGatewayConfig {
   provider: 'efi_bank' | 'mercadopago' | 'asaas' | 'mock_dev';
-  clientId?: string;
-  clientSecret?: string;
-  pixKey?: string;
+  apiKey?: string;
+  webhookToken?: string;
+  environment: 'sandbox' | 'production';
   webhookSecret?: string;
   isConfigured: boolean;
 }
@@ -28,23 +28,18 @@ export class VeloPixGatewayAdapter {
 
   constructor() {
     const provider = (process.env.PIX_GATEWAY_PROVIDER as PaymentGatewayConfig['provider']) || 'efi_bank';
-    const clientId = process.env.PIX_CLIENT_ID;
-    const clientSecret = process.env.PIX_CLIENT_SECRET;
-    const pixKey = process.env.PIX_KEY;
-    const webhookSecret = process.env.WEBHOOK_SECRET;
+    const apiKey = process.env.ASAAS_API_KEY?.trim();
+    const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN?.trim();
+    const environment = process.env.ASAAS_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production';
 
-    // Check if fully configured with real credentials
-    const isConfigured = Boolean(
-      clientId && clientSecret && pixKey && webhookSecret &&
-      clientId.trim().length > 0 && clientSecret.trim().length > 0
-    );
+    const isConfigured = provider === 'asaas' && Boolean(apiKey && webhookToken);
 
     this.config = {
       provider,
-      clientId,
-      clientSecret,
-      pixKey,
-      webhookSecret,
+      apiKey,
+      webhookToken,
+      environment,
+      webhookSecret: process.env.WEBHOOK_SECRET,
       isConfigured,
     };
   }
@@ -53,30 +48,61 @@ export class VeloPixGatewayAdapter {
     return this.config.isConfigured;
   }
 
-  /**
-   * Generates a cryptographically secure, standard-compliant PIX TXID.
-   * Format: Alphanumeric string between 26 and 35 characters.
-   */
-  public generateSecureTxid(): string {
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const randomEntropy = crypto.randomBytes(12).toString('hex').toUpperCase();
-    return `VELO${timestamp}${randomEntropy}`.substring(0, 32);
+  private get apiBaseUrl(): string {
+    return this.config.environment === 'sandbox'
+      ? 'https://api-sandbox.asaas.com/v3'
+      : 'https://api.asaas.com/v3';
   }
 
-  /**
-   * Generates a local, self-contained SVG QR code placeholder avoiding external financial data leaks.
-   */
-  private generateLocalQrCodeSvg(text: string): string {
-    // Generate a secure local SVG representation without calling external third-party services
-    const hash = crypto.createHash('sha256').update(text).digest('hex');
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-      <rect width="200" height="200" fill="#ffffff"/>
-      <rect x="20" y="20" width="40" height="40" fill="#000000"/>
-      <rect x="140" y="20" width="40" height="40" fill="#000000"/>
-      <rect x="20" y="140" width="40" height="40" fill="#000000"/>
-      <text x="100" y="105" font-family="sans-serif" font-size="10" text-anchor="middle" fill="#333">PIX QR Code</text>
-      <text x="100" y="125" font-family="sans-serif" font-size="8" text-anchor="middle" fill="#666">${hash.substring(0, 12)}</text>
-    </svg>`;
+  private async asaasRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const response = await fetch(`${this.apiBaseUrl}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        access_token: this.config.apiKey!,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...init.headers,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Asaas request failed (${response.status})`);
+    }
+    return response.json() as Promise<T>;
+  }
+
+  private async ensureAsaasCustomer(params: {
+    organizationId: string;
+    organizationName: string;
+    cnpj: string;
+    email: string;
+    phone: string;
+  }): Promise<string> {
+    const reference = `organization:${params.organizationId}`;
+    const query = new URLSearchParams({ externalReference: reference, limit: '100' });
+    const customers = await this.asaasRequest<{ data?: Array<{ id: string; externalReference?: string }> }>(
+      `/customers?${query.toString()}`,
+    );
+    const existing = customers.data?.find(customer => customer.externalReference === reference);
+    if (existing) return existing.id;
+
+    const created = await this.asaasRequest<{ id?: string }>('/customers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: params.organizationName.trim().slice(0, 100),
+        cpfCnpj: params.cnpj.replace(/\D/g, ''),
+        email: params.email.trim(),
+        phone: params.phone.replace(/\D/g, '') || undefined,
+        notificationDisabled: false,
+        externalReference: reference,
+      }),
+    });
+    if (!created.id) throw new Error('Asaas customer response did not include an ID');
+    return created.id;
+  }
+
+  private async getPaymentQrCode(paymentId: string): Promise<{ payload?: string; encodedImage?: string; expirationDate?: string }> {
+    return this.asaasRequest(`/payments/${encodeURIComponent(paymentId)}/pixQrCode`);
   }
 
   /**
@@ -85,35 +111,84 @@ export class VeloPixGatewayAdapter {
    */
   public async createPixCharge(params: {
     invoiceId: string;
+    organizationId: string;
     amount: number;
     organizationName: string;
     description: string;
+    dueDate: string;
+    cnpj: string;
+    email: string;
+    phone: string;
   }): Promise<PixChargeResult> {
     if (!this.config.isConfigured) {
-      // In development mode, if explicit dev simulation is enabled, return test data but flagged clearly
-      if (process.env.NODE_ENV === 'development' && process.env.ENABLE_DEV_PAYMENT_SIMULATION === 'true') {
-        const txid = this.generateSecureTxid();
-        const dummyPix = `00020126580014br.gov.bcb.pix0136demo-chave-pix-teste520400005303986540${params.amount.toFixed(2)}5802BR5918VELOMEDIA DEMO6009SAO PAULO62070503***6304ABCD`;
-        return {
-          status: 'created',
-          txid,
-          copiaECola: dummyPix,
-          qrCodeSvg: this.generateLocalQrCodeSvg(dummyPix),
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        };
-      }
-
-      // Explicitly reject: provider not configured
       return {
         status: 'payment_provider_not_configured',
-        error: 'O provedor de pagamentos PIX não está configurado neste ambiente (PIX_CLIENT_ID e PIX_CLIENT_SECRET ausentes).',
+        error: 'Configure PIX_GATEWAY_PROVIDER=asaas, ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN.',
       };
     }
 
-    return {
-      status: 'payment_provider_not_configured',
-      error: 'A integração transacional com o provedor PIX ainda não está implementada.',
-    };
+    if (!Number.isFinite(params.amount) || params.amount <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(params.dueDate)) {
+      return { status: 'failed', error: 'Valor ou vencimento da fatura inválido para gerar o PIX.' };
+    }
+    const document = params.cnpj.replace(/\D/g, '');
+    if (![11, 14].includes(document.length) || !params.email.includes('@')) {
+      return { status: 'failed', error: 'Complete o CPF/CNPJ e o e-mail de cobrança da organização antes de gerar o PIX.' };
+    }
+
+    try {
+      const customerId = await this.ensureAsaasCustomer({
+        organizationId: params.organizationId,
+        organizationName: params.organizationName,
+        cnpj: document,
+        email: params.email,
+        phone: params.phone,
+      });
+      const reference = `invoice:${params.invoiceId}`;
+      const query = new URLSearchParams({ externalReference: reference, limit: '100' });
+      const existingPayments = await this.asaasRequest<{ data?: Array<{ id: string; status?: string }> }>(
+        `/payments?${query.toString()}`,
+      );
+      const existing = existingPayments.data?.find(payment =>
+        ['PENDING', 'OVERDUE', 'AWAITING_RISK_ANALYSIS'].includes(payment.status || ''),
+      );
+      const payment = existing || await this.asaasRequest<{ id?: string }>('/payments', {
+        method: 'POST',
+        body: JSON.stringify({
+          customer: customerId,
+          billingType: 'PIX',
+          value: Number(params.amount.toFixed(2)),
+          dueDate: params.dueDate,
+          description: params.description.slice(0, 500),
+          externalReference: reference,
+        }),
+      });
+      if (!payment.id) throw new Error('Asaas payment response did not include an ID');
+
+      const pix = await this.getPaymentQrCode(payment.id);
+      if (!pix.payload || !pix.encodedImage) {
+        throw new Error('Asaas PIX response did not include a QR code');
+      }
+      return {
+        status: 'created',
+        txid: payment.id,
+        copiaECola: pix.payload,
+        qrCodeUrl: `data:image/png;base64,${pix.encodedImage}`,
+        expiresAt: pix.expirationDate,
+      };
+    } catch {
+      return {
+        status: 'failed',
+        error: 'Não foi possível gerar a cobrança PIX no Asaas. Confira os dados da organização e tente novamente.',
+      };
+    }
+  }
+
+  public verifyAsaasWebhookToken(token: string | undefined): boolean {
+    const expected = this.config.webhookToken;
+    if (!expected || !token) return false;
+    const supplied = Buffer.from(token);
+    const configured = Buffer.from(expected);
+    return supplied.length === configured.length && crypto.timingSafeEqual(supplied, configured);
   }
 
   /**

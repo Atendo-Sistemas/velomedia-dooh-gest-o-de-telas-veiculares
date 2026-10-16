@@ -19,7 +19,7 @@ Production requires a valid PostgreSQL `DATABASE_URL`; startup fails closed if i
 
 The API preserves its existing domain object shapes as JSONB records in `repository_records`, indexed by type and tenant. Sessions, device credentials, pairing tokens, replay nonces, webhook idempotency and remote commands use dedicated PostgreSQL tables. Tenant-scoped operations query and mutate records with their organization ID. Pairing-token consumption is atomic; PoP/replay insertion and campaign/device/driver counters run in a database transaction with row locks. PostgreSQL is the production source of truth; back up the database, not an app JSON file.
 
-PIX provider integration, real payment webhooks and driver payouts are not implemented. The API rejects these operations rather than claiming a payment was processed.
+PIX billing for organization invoices is integrated with Asaas. Driver payouts and advertiser charge flows are not integrated; the API must not mark those operations as paid.
 The public QR player loads display-safe campaign data without an admin session. Proof-of-play submissions still require a provisioned device credential and signed request; the public kiosk bootstrap does not expose or create that credential.
 
 ### Docker Compose
@@ -47,6 +47,12 @@ The public QR player loads display-safe campaign data without an admin session. 
 4. Configure the real domain in `deploy/Caddyfile.docker`; keep the `reverse_proxy` target on the matching loopback port. Point DNS to the VPS, configure the shared reverse proxy without replacing other sites, and allow only SSH/HTTP/HTTPS through the firewall.
 
 5. Review `docker compose logs -f app`. Startup applies pending schema migrations and creates the configured initial admin only when needed. Existing super-admin password hashes are retained; changing `INITIAL_ADMIN_PASSWORD` does not reset an existing password.
+
+### Asaas PIX billing
+
+Select `PIX_GATEWAY_PROVIDER=asaas`, set `ASAAS_API_KEY`, and set `ASAAS_ENVIRONMENT` to `sandbox` for testing or `production` for live charges. Configure `ASAAS_WEBHOOK_TOKEN` as a unique random value of 32–255 characters (without spaces), and register `https://<your-domain>/api/v1/webhooks/asaas` in the Asaas dashboard using the same token. Subscribe to `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED`, and `PAYMENT_OVERDUE`; Asaas sends the configured token in the `asaas-access-token` header.
+
+The invoice PIX endpoint creates/reuses an Asaas customer from the organization CNPJ and billing contact, creates/reuses a PIX payment using the invoice as its external reference, and returns the copy-and-paste code and QR image. The webhook confirms only a payment whose provider ID, invoice reference, and amount match a locally recorded invoice. Test with Asaas sandbox credentials before enabling production. Never commit API keys or webhook tokens.
 
 ### Migrate an existing JSON VPS
 
