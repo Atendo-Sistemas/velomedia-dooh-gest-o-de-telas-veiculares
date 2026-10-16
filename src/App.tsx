@@ -39,6 +39,9 @@ import { apiClient } from './services/apiClient';
 
 export default function App() {
   // Read initial tab and kiosk mode from URL (e.g. ?tab=player or ?kiosk=true or ?device=TV-SP-8491)
+  const playerParams = new URLSearchParams(window.location.search);
+  const isKioskMode = playerParams.get('kiosk') === 'true' || playerParams.get('mode') === 'kiosk';
+  const kioskDeviceCode = playerParams.get('device') || '';
   const getInitialActiveTab = (): ActiveTab => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -81,6 +84,11 @@ export default function App() {
   const [authenticatedUser, setAuthenticatedUser] = useState<SaaSUser | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
+  const [isLoadingKiosk, setIsLoadingKiosk] = useState(isKioskMode);
+  const [kioskError, setKioskError] = useState<string | null>(null);
+  const [kioskDevice, setKioskDevice] = useState<Device | null>(null);
+  const [kioskCampaigns, setKioskCampaigns] = useState<Campaign[]>([]);
+  const [kioskGeoFences, setKioskGeoFences] = useState<GeoFence[]>([]);
   
   // Primary persistent state
   const [devices, setDevices] = useState<Device[]>(INITIAL_DEVICES);
@@ -99,6 +107,10 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true;
+    if (isKioskMode) {
+      setIsCheckingSession(false);
+      return () => { isMounted = false; };
+    }
     apiClient.getMe()
       .then(({ authenticated, user }) => {
         if (!isMounted || !authenticated || !user) return;
@@ -113,7 +125,35 @@ export default function App() {
         if (isMounted) setIsCheckingSession(false);
       });
     return () => { isMounted = false; };
-  }, []);
+  }, [isKioskMode]);
+
+  useEffect(() => {
+    if (!isKioskMode) return;
+    if (!kioskDeviceCode) {
+      setKioskError('Este link não está associado a uma tela cadastrada.');
+      setIsLoadingKiosk(false);
+      return;
+    }
+
+    let isMounted = true;
+    apiClient.getPublicPlayer(kioskDeviceCode)
+      .then(({ device, campaigns: playerCampaigns, geoFences: playerGeoFences }) => {
+        if (!isMounted) return;
+        setKioskDevice(device);
+        setKioskCampaigns(playerCampaigns);
+        setKioskGeoFences(playerGeoFences);
+      })
+      .catch(error => {
+        if (isMounted) {
+          setKioskError(error instanceof Error ? error.message : 'Não foi possível abrir o player desta tela.');
+        }
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingKiosk(false);
+      });
+
+    return () => { isMounted = false; };
+  }, [isKioskMode, kioskDeviceCode]);
 
   // Bootstrap live data from backend API after authentication
   useEffect(() => {
@@ -558,9 +598,32 @@ export default function App() {
   };
 
   const activeDeviceForPlayer = devices.find((d) => d.id === activePlayerDeviceId) || devices[0];
+  const playerDevice = isKioskMode ? kioskDevice : activeDeviceForPlayer;
   const onlineCount = devices.filter((d) => d.status === 'online').length;
 
-  if (activeTab !== 'player' && (isCheckingSession || (authenticatedUser && isLoadingDashboard))) {
+  if (isKioskMode && isLoadingKiosk) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center" role="status">
+        <div className="flex items-center gap-3">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+          <span>Carregando tela…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isKioskMode && (kioskError || !kioskDevice)) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-6 text-center">
+        <div className="max-w-lg space-y-3">
+          <h1 className="text-2xl font-bold">VeloMedia</h1>
+          <p className="text-sm text-slate-300">{kioskError || 'Esta tela não foi encontrada ou está desativada.'}</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!isKioskMode && (isCheckingSession || (authenticatedUser && isLoadingDashboard))) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center" role="status">
         <div className="flex items-center gap-3">
@@ -571,23 +634,32 @@ export default function App() {
     );
   }
 
-  if (activeTab !== 'player' && !authenticatedUser) {
+  if (!isKioskMode && !authenticatedUser) {
     return <LoginPage onLogin={handleLogin} />;
   }
 
   // If in Pure Kiosk Player Mode, render full screen TV layout directly
-  if (activeTab === 'player') {
+  if (activeTab === 'player' && playerDevice) {
     return (
       <div className="min-h-screen bg-black text-slate-100 flex flex-col font-sans select-none overflow-x-hidden">
         <KioskPlayer
-          device={activeDeviceForPlayer}
-          campaigns={campaigns}
-          geoFences={geoFences}
+          device={playerDevice}
+          campaigns={isKioskMode ? kioskCampaigns : campaigns}
+          geoFences={isKioskMode ? kioskGeoFences : geoFences}
+          simplified={isKioskMode || playerParams.get('simple') === '1'}
           onExitPlayer={() => setActiveTab('overview')}
-          onRecordProofOfPlay={handleRecordProofOfPlay}
+          onRecordProofOfPlay={isKioskMode ? () => {} : handleRecordProofOfPlay}
           onUpdateDeviceLocation={handleUpdateDeviceLocation}
         />
       </div>
+    );
+  }
+
+  if (activeTab === 'player') {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-6 text-center">
+        <p className="text-sm text-slate-300">Cadastre uma tela para iniciar o player.</p>
+      </main>
     );
   }
 

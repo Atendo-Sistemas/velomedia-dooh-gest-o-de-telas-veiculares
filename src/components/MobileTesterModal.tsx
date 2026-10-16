@@ -18,6 +18,8 @@ import {
   Globe
 } from 'lucide-react';
 import { Device, Driver } from '../types';
+import { QRCodeImage } from './QRCodeImage';
+import { buildKioskUrl } from '../services/kioskUrl';
 
 interface MobileTesterModalProps {
   device?: Device;
@@ -38,7 +40,7 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
 
   // Direct live URL of the player
   const currentOrigin = window.location.origin;
-  const directPlayerUrl = `${currentOrigin}/?tab=player&device=${deviceCode}`;
+  const directPlayerUrl = buildKioskUrl(currentOrigin, deviceCode);
 
   const handleCopyUrl = () => {
     navigator.clipboard.writeText(directPlayerUrl);
@@ -85,12 +87,7 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
             
             {/* Left QR Code Container */}
             <div className="sm:col-span-5 flex flex-col items-center justify-center text-center p-3 bg-white rounded-xl shadow-md border border-slate-300">
-              {/* Dynamic QR Code Generator via SVG / API */}
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(directPlayerUrl)}&color=0f172a&bgcolor=ffffff&margin=1`}
-                alt="QR Code para conectar celular"
-                className="w-40 h-40 sm:w-44 sm:h-44 object-contain rounded-lg"
-              />
+              <QRCodeImage value={directPlayerUrl} alt="QR Code para abrir o player em modo quiosque" size={176} className="h-40 w-40 rounded-lg sm:h-44 sm:w-44" />
               <span className="mt-2 text-[11px] font-bold text-slate-800 flex items-center space-x-1">
                 <QrCode className="w-3.5 h-3.5 text-blue-600 inline mr-1" />
                 Aponte a câmera do celular

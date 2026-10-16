@@ -51,6 +51,9 @@ export const apiClient = {
   async getMe(): Promise<{ authenticated: boolean; user?: SaaSUser; organization?: SaaSOrganization }> {
     return request('/auth/me');
   },
+  async getPublicPlayer(deviceCode: string): Promise<{ device: Device; campaigns: Campaign[]; geoFences: GeoFence[] }> {
+    return request(`/player/${encodeURIComponent(deviceCode)}`);
+  },
 
   // Organizations
   async getOrganizations(): Promise<SaaSOrganization[]> {

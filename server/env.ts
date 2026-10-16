@@ -3,8 +3,6 @@
  * Enforces fail-fast validation before the HTTP server binds to any port.
  */
 
-import path from 'node:path';
-
 export interface EnvValidationResult {
   valid: boolean;
   missing: string[];
@@ -19,7 +17,7 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
     const requiredVars = [
       'WEBHOOK_SECRET',
       'CORS_ALLOWED_ORIGINS',
-      'DATA_FILE_PATH',
+      'DATABASE_URL',
       'INITIAL_ADMIN_EMAIL',
       'INITIAL_ADMIN_PASSWORD',
     ];
@@ -51,13 +49,15 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       errors.push('INITIAL_ADMIN_EMAIL deve ser um endereço de e-mail válido.');
     }
 
-    const dataFilePath = env.DATA_FILE_PATH?.trim();
-    if (dataFilePath && !path.isAbsolute(dataFilePath)) {
-      errors.push('DATA_FILE_PATH deve ser um caminho absoluto em armazenamento persistente.');
-    } else if (dataFilePath) {
-      const relativePath = path.relative('/var/lib/velomedia', path.resolve(dataFilePath));
-      if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
-        errors.push('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
+    const databaseUrl = env.DATABASE_URL?.trim();
+    if (databaseUrl) {
+      try {
+        const parsed = new URL(databaseUrl);
+        if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
+          errors.push('DATABASE_URL deve ser uma URL PostgreSQL com host, database e credenciais configurados.');
+        }
+      } catch {
+        errors.push('DATABASE_URL deve ser uma URL PostgreSQL válida.');
       }
     }
 

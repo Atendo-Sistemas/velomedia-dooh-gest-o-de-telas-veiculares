@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { verifyWebhookSignature, getRequiredSecret } from './crypto';
-import { storage } from './storage';
+import { getVeloRepository } from './repository';
 
 export type InvoicePaymentStatus = 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded';
 
@@ -24,6 +24,7 @@ export interface PaymentGatewayConfig {
 
 export class VeloPixGatewayAdapter {
   private config: PaymentGatewayConfig;
+  private repository = getVeloRepository();
 
   constructor() {
     const provider = (process.env.PIX_GATEWAY_PROVIDER as PaymentGatewayConfig['provider']) || 'efi_bank';
@@ -118,12 +119,12 @@ export class VeloPixGatewayAdapter {
   /**
    * Verifies incoming webhook signature and prevents replay/duplicate execution.
    */
-  public processWebhookEvent(rawBody: string, signature: string): { 
+  public async processWebhookEvent(rawBody: string, signature: string): Promise<{ 
     success: boolean; 
     duplicate?: boolean; 
     reason?: string; 
     event?: any 
-  } {
+  }> {
     const webhookSecret = this.config.webhookSecret || (
       process.env.NODE_ENV === 'production' 
         ? getRequiredSecret('WEBHOOK_SECRET')
@@ -139,7 +140,7 @@ export class VeloPixGatewayAdapter {
       const parsed = JSON.parse(rawBody);
       const eventId = parsed.eventId || parsed.id || crypto.createHash('sha256').update(rawBody).digest('hex');
 
-      const isNew = storage.recordWebhook({
+      const isNew = await this.repository.recordWebhook({
         eventId,
         provider: this.config.provider,
         processedAt: new Date().toISOString(),

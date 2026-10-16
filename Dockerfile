@@ -17,6 +17,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/server/db ./server/db
 RUN mkdir -p /var/lib/velomedia && chown node:node /var/lib/velomedia
 
 USER node

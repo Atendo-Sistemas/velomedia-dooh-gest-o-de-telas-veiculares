@@ -24,6 +24,7 @@ import type {
 } from './storage';
 
 import { storage } from './storage';
+import { PostgresRepository } from './postgres-repository';
 
 export interface VeloRepository {
   // Organizations
@@ -103,6 +104,16 @@ export interface VeloRepository {
   // Audit Logs
   logAudit(log: Omit<AuditLog, 'id' | 'createdAt'>): Promise<void>;
   getAuditLogs(orgId: string, limit?: number): Promise<AuditLog[]>;
+
+  // Sessions
+  createSession(session: import('./storage').SessionRecord): Promise<void>;
+  getSession(token: string): Promise<import('./storage').SessionRecord | undefined>;
+  deleteSession(token: string): Promise<boolean>;
+
+  // Atomic device security operations
+  consumePairingToken(token: string): Promise<PairingTokenRecord | undefined>;
+  recordProofOfPlayAndReplay(log: ProofOfPlayLog, orgId: string): Promise<boolean>;
+  close?(): Promise<void>;
 }
 
 /**
@@ -275,96 +286,40 @@ export class JsonDevelopmentRepository implements VeloRepository {
   async getAuditLogs(orgId: string, limit?: number): Promise<AuditLog[]> {
     return storage.getAuditLogs(orgId, limit);
   }
+
+  async createSession(session: import('./storage').SessionRecord): Promise<void> { storage.createSession(session); }
+  async getSession(token: string): Promise<import('./storage').SessionRecord | undefined> { return storage.getSession(token); }
+  async deleteSession(token: string): Promise<boolean> { return storage.deleteSession(token); }
+  async consumePairingToken(token: string): Promise<PairingTokenRecord | undefined> {
+    const record = storage.getPairingToken(token);
+    if (record) storage.markPairingTokenUsed(token);
+    return record;
+  }
+  async recordProofOfPlayAndReplay(log: ProofOfPlayLog, orgId: string): Promise<boolean> {
+    const replay = storage.checkAndRecordReplay(log.id, log.nonce, new Date(log.endedAt || log.timestamp).getTime());
+    return replay.valid && storage.recordProofOfPlay(log, orgId);
+  }
 }
 
-/**
- * Production PostgreSQL Repository
- */
-export class PostgresRepository implements VeloRepository {
-  private databaseUrl: string;
+export { PostgresRepository };
 
-  constructor(databaseUrl: string) {
-    if (!databaseUrl || databaseUrl.trim().length === 0) {
-      throw new Error('PostgresRepository requires a valid DATABASE_URL.');
-    }
-    this.databaseUrl = databaseUrl;
-  }
-
-  public getConnectionString(): string {
-    return this.databaseUrl;
-  }
-
-  async getOrganizations(): Promise<SaaSOrganization[]> { return []; }
-  async getOrganizationById(_id: string): Promise<SaaSOrganization | undefined> { return undefined; }
-  async saveOrganization(_org: SaaSOrganization): Promise<void> {}
-  async deleteOrganization(_id: string): Promise<boolean> { return false; }
-
-  async getUsers(_orgId?: string): Promise<SaaSUser[]> { return []; }
-  async getUserById(_id: string, _orgId?: string): Promise<SaaSUser | undefined> { return undefined; }
-  async getUserByEmail(_email: string): Promise<(SaaSUser & { passwordHash?: string }) | undefined> { return undefined; }
-  async saveUser(_user: SaaSUser, _password?: string): Promise<void> {}
-  async deleteUser(_id: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getDrivers(_orgId: string): Promise<Driver[]> { return []; }
-  async getDriverById(_id: string, _orgId: string): Promise<Driver | undefined> { return undefined; }
-  async saveDriver(_driver: Driver, _orgId: string): Promise<Driver | null> { return null; }
-  async deleteDriver(_id: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getDevices(_orgId: string): Promise<Device[]> { return []; }
-  async getDeviceById(_id: string, _orgId: string): Promise<Device | undefined> { return undefined; }
-  async getDeviceByIdInternal(_id: string): Promise<Device | undefined> { return undefined; }
-  async saveDevice(_device: Device, _orgId: string): Promise<Device | null> { return null; }
-  async deleteDevice(_id: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getDeviceCredential(_deviceId: string): Promise<DeviceCredentialRecord | undefined> { return undefined; }
-  async saveDeviceCredential(_cred: DeviceCredentialRecord): Promise<void> {}
-  async revokeDeviceCredential(_deviceId: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getCampaigns(_orgId: string): Promise<Campaign[]> { return []; }
-  async getCampaignById(_id: string, _orgId: string): Promise<Campaign | undefined> { return undefined; }
-  async saveCampaign(_campaign: Campaign, _orgId: string): Promise<Campaign | null> { return null; }
-  async deleteCampaign(_id: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getGeoFences(_orgId: string): Promise<GeoFence[]> { return []; }
-  async getGeoFenceById(_id: string, _orgId: string): Promise<GeoFence | undefined> { return undefined; }
-  async saveGeoFence(_geofence: GeoFence, _orgId: string): Promise<GeoFence | null> { return null; }
-  async deleteGeoFence(_id: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getAdvertisers(_orgId: string): Promise<AdvertiserAccount[]> { return []; }
-  async getAdvertiserById(_id: string, _orgId: string): Promise<AdvertiserAccount | undefined> { return undefined; }
-  async saveAdvertiser(_adv: AdvertiserAccount, _orgId: string): Promise<AdvertiserAccount | null> { return null; }
-  async deleteAdvertiser(_id: string, _orgId: string): Promise<boolean> { return false; }
-
-  async getInvoices(_orgId: string): Promise<SaaSInvoice[]> { return []; }
-  async getInvoiceById(_id: string, _orgId: string): Promise<SaaSInvoice | undefined> { return undefined; }
-  async saveInvoice(_invoice: SaaSInvoice, _orgId: string): Promise<SaaSInvoice | null> { return null; }
-
-  async getProofOfPlayLogs(_orgId: string, _limit?: number): Promise<ProofOfPlayLog[]> { return []; }
-  async recordProofOfPlay(_log: ProofOfPlayLog, _orgId: string): Promise<boolean> { return false; }
-
-  async checkAndRecordReplay(_eventId: string, _nonce: string, _timestampMs: number): Promise<{ valid: boolean; reason?: string }> { return { valid: true }; }
-
-  async recordWebhook(_record: WebhookRecord): Promise<boolean> { return false; }
-
-  async createPairingToken(_token: PairingTokenRecord): Promise<void> {}
-  async getPairingToken(_token: string): Promise<PairingTokenRecord | undefined> { return undefined; }
-  async markPairingTokenUsed(_token: string): Promise<void> {}
-
-  async createRemoteCommand(_cmd: RemoteCommandRecord): Promise<void> {}
-  async getPendingCommands(_deviceId: string, _orgId?: string): Promise<RemoteCommandRecord[]> { return []; }
-  async acknowledgeCommand(_commandId: string, _orgId?: string): Promise<boolean> { return false; }
-
-  async logAudit(_log: Omit<AuditLog, 'id' | 'createdAt'>): Promise<void> {}
-  async getAuditLogs(_orgId: string, _limit?: number): Promise<AuditLog[]> { return []; }
-}
+let repository: VeloRepository | undefined;
 
 export function getVeloRepository(): VeloRepository {
-  const dbUrl = process.env.DATABASE_URL;
-  if (dbUrl && dbUrl.trim().length > 0) {
-    return new PostgresRepository(dbUrl);
+  if (repository) return repository;
+  const dbUrl = process.env.DATABASE_URL?.trim();
+  if (process.env.NODE_ENV === 'production') {
+    if (!dbUrl) throw new Error('Production requires DATABASE_URL; JSON file storage is disabled.');
+    return repository = new PostgresRepository(dbUrl);
   }
-  if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
-    throw new Error('Ambiente de produção estrita exige DATABASE_URL configurada para o PostgreSQL.');
-  }
-  return new JsonDevelopmentRepository();
+  return repository = dbUrl ? new PostgresRepository(dbUrl) : new JsonDevelopmentRepository();
+}
+
+export async function initializeVeloRepository(): Promise<void> {
+  const repo = getVeloRepository();
+  if (repo instanceof PostgresRepository) await repo.initialize();
+}
+
+export async function closeVeloRepository(): Promise<void> {
+  await repository?.close?.();
 }

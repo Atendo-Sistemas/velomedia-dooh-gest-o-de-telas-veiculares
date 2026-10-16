@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 import { 
   Tv, 
   MapPin, 
@@ -41,6 +42,7 @@ interface KioskPlayerProps {
   device: Device;
   campaigns: Campaign[];
   geoFences: GeoFence[];
+  simplified?: boolean;
   onExitPlayer: () => void;
   onRecordProofOfPlay: (log: ProofOfPlayLog) => void;
   onUpdateDeviceLocation: (deviceId: string, lat: number, lng: number, address: string, neighborhood: string) => void;
@@ -50,6 +52,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
   device,
   campaigns,
   geoFences,
+  simplified = false,
   onExitPlayer,
   onRecordProofOfPlay,
   onUpdateDeviceLocation,
@@ -87,6 +90,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
   const [showTriviaModal, setShowTriviaModal] = useState(false);
   const [showTechMenu, setShowTechMenu] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
+  const [campaignQr, setCampaignQr] = useState('');
 
   // Trivia state
   const [activeTriviaIndex, setActiveTriviaIndex] = useState(0);
@@ -143,15 +147,35 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
   // Get eligible campaigns based on current device location
   const matchingGfs = getMatchingGeoFences(device.currentLocation.lat, device.currentLocation.lng, geoFences);
   const eligibleCampaigns = campaigns.filter((c) => isCampaignEligible(c, device, geoFences));
-  const activeCampaignList = eligibleCampaigns.length > 0 ? eligibleCampaigns : campaigns;
+  const activeCampaignList = eligibleCampaigns;
 
   const currentCampaign = activeCampaignList[currentCampaignIndex % activeCampaignList.length] || campaigns[0];
+
+  useEffect(() => {
+    const value = currentCampaign?.creative.qrCodeUrl || currentCampaign?.creative.couponCode || '';
+    if (!value) {
+      setCampaignQr('');
+      return;
+    }
+
+    let isCurrent = true;
+    QRCode.toDataURL(value, { width: 320, margin: 1, errorCorrectionLevel: 'M' })
+      .then(dataUrl => {
+        if (isCurrent) setCampaignQr(dataUrl);
+      })
+      .catch(() => {
+        if (isCurrent) setCampaignQr('');
+      });
+    return () => { isCurrent = false; };
+  }, [currentCampaign?.id, currentCampaign?.creative.qrCodeUrl, currentCampaign?.creative.couponCode]);
 
   // Playback timer & PoP generator
   useEffect(() => {
     const timer = setInterval(() => {
       setSecondsRemaining((prev) => {
         if (prev <= 1) {
+          if (activeCampaignList.length === 0) return 15;
+
           // Record Proof of Play
           if (currentCampaign) {
             const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -433,6 +457,17 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
     }
   };
 
+  if (!currentCampaign) {
+    return (
+      <main className="flex min-h-screen w-screen items-center justify-center bg-slate-950 px-6 text-center text-white">
+        <div className="max-w-lg space-y-3">
+          <h1 className="text-2xl font-bold">VeloMedia</h1>
+          <p className="text-sm text-slate-300">Nenhuma campanha está disponível para esta tela no momento.</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <div 
       className={`select-none bg-black overflow-hidden flex flex-col items-center justify-center transition-all duration-300 ${
@@ -451,6 +486,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
         {/* ========================================================================= */}
         {/* TOP STATUS & CONTROL BAR (Passenger info + Lock Status + Secret PIN)      */}
         {/* ========================================================================= */}
+        {!simplified && (
         <div className="bg-slate-950/95 backdrop-blur-md px-3 sm:px-6 py-2 sm:py-2.5 border-b border-slate-800/80 flex items-center justify-between text-slate-200 z-20 flex-shrink-0">
           
           {/* Left: Driver & Car details */}
@@ -611,14 +647,15 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
           </div>
 
         </div>
+        )}
 
         {/* ========================================================================= */}
         {/* TV MAIN CONTENT AREA (Split Layout: Creative Media + Interactive Widgets) */}
         {/* ========================================================================= */}
-        <div className="relative flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden bg-slate-950">
+        <div className={`relative flex-1 grid grid-cols-1 ${simplified ? '' : 'lg:grid-cols-12'} overflow-hidden bg-slate-950`}>
           
           {/* Main Visual Display (8 cols on large screens) */}
-          <div className="lg:col-span-8 relative flex flex-col justify-between p-4 sm:p-7 min-h-[340px] overflow-hidden">
+          <div className={`${simplified ? '' : 'lg:col-span-8'} relative flex flex-col justify-between p-4 sm:p-7 min-h-[340px] overflow-hidden`}>
             
             {/* Background Creative Video or Image with Gradient Overlay */}
             {isVideoMedia(currentCampaign.creative.mediaUrl, currentCampaign.creative.type) ? (
@@ -715,6 +752,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
           </div>
 
           {/* Right Side: Passenger Utilities & Interactive Widgets (4 cols) */}
+          {!simplified && (
           <div className="lg:col-span-4 bg-slate-900/95 border-t lg:border-t-0 lg:border-l border-slate-800 p-4 sm:p-5 flex flex-col justify-between space-y-3 overflow-y-auto">
             
             {/* Widget 1: Live Ride Route Status */}
@@ -723,6 +761,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
                 <span className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Corrida em Andamento</span>
                 <span className="text-emerald-400 font-mono font-bold">48 km/h</span>
               </div>
+              )}
               <div className="flex items-center space-x-2">
                 <Navigation className="w-4 h-4 text-cyan-400 flex-shrink-0" />
                 <span className="text-xs font-bold text-white truncate">{device.currentLocation.address || 'Av. Paulista, 1578'}</span>
@@ -807,7 +846,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       {/* ========================================================================= */}
       {/* MODAL: KIOSK PIN CODE KEYPAD MODAL (SECURITY LOCKDOWN PROTECTION)        */}
       {/* ========================================================================= */}
-      {showPinModal && (
+      {!simplified && showPinModal && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
           <div className="bg-slate-900 border-2 border-indigo-500/50 rounded-3xl p-6 max-w-sm w-full shadow-2xl relative text-center space-y-4">
             
@@ -916,7 +955,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       {/* ========================================================================= */}
       {/* MODAL: SCREEN FORMAT & ASPECT RATIO MODAL                                 */}
       {/* ========================================================================= */}
-      {showFormatModal && (
+      {!simplified && showFormatModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
           <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl relative space-y-4">
             
@@ -994,9 +1033,12 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
 
             {/* QR Code Box */}
             <div className="bg-white p-4 rounded-2xl mx-auto inline-block shadow-lg">
-              <div className="w-44 h-44 bg-slate-950 p-2 rounded-xl flex items-center justify-center flex-col space-y-2">
-                <QrCode className="w-32 h-32 text-cyan-400" />
-                <span className="text-[9px] text-slate-400 font-mono">APONTE A CÂMERA DO CELULAR</span>
+              <div className="w-44 h-44 bg-white p-1 rounded-xl flex items-center justify-center">
+                {campaignQr ? (
+                  <img src={campaignQr} alt="QR Code da oferta" className="h-full w-full" />
+                ) : (
+                  <span className="px-4 text-xs text-slate-600">Cupom: {currentCampaign.creative.couponCode || 'indisponível'}</span>
+                )}
               </div>
             </div>
 
@@ -1047,16 +1089,18 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               {currentCampaign.creative.fullInfoHtml || currentCampaign.creative.tagline}
             </p>
 
-            <div className="p-3 bg-slate-800/60 rounded-xl space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Região de Atendimento:</span>
-                <span className="text-white font-medium">{device.currentLocation.neighborhood}</span>
+            {!simplified && (
+              <div className="p-3 bg-slate-800/60 rounded-xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Região de Atendimento:</span>
+                  <span className="text-white font-medium">{device.currentLocation.neighborhood}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Oferta Válida Até:</span>
+                  <span className="text-white font-medium">{currentCampaign.schedule.endDate}</span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Oferta Válida Até:</span>
-                <span className="text-white font-medium">{currentCampaign.schedule.endDate}</span>
-              </div>
-            </div>
+            )}
 
             <button
               onClick={() => {
@@ -1074,7 +1118,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       {/* ========================================================================= */}
       {/* MODAL 3: Technician PIN & Hardware Diagnostics Menu                       */}
       {/* ========================================================================= */}
-      {showTechMenu && (
+      {!simplified && showTechMenu && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
           <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl relative text-slate-200">
             <button

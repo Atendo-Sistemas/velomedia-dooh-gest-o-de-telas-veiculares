@@ -31,7 +31,7 @@ export interface AuditLog {
 export interface PairingTokenRecord {
   token: string;
   organizationId: string;
-  driverId: string;
+  driverId?: string;
   screenPosition: 'headrest_right' | 'headrest_left' | 'center_console' | 'front_dash';
   hardwareOwnership: 'company_owned' | 'driver_byod';
   expiresAt: number; // timestamp ms
@@ -1257,4 +1257,15 @@ export class VeloStorage {
   }
 }
 
-export const storage = new VeloStorage();
+let developmentStorage: VeloStorage | undefined;
+
+export const storage = new Proxy({} as VeloStorage, {
+  get(_target, property) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('JSON file storage is unavailable in production; configure DATABASE_URL.');
+    }
+    developmentStorage ||= new VeloStorage();
+    const value = Reflect.get(developmentStorage, property, developmentStorage);
+    return typeof value === 'function' ? value.bind(developmentStorage) : value;
+  },
+});

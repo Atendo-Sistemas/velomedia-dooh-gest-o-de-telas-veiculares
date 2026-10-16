@@ -28,6 +28,8 @@ import {
   Download
 } from 'lucide-react';
 import { Device, Driver } from '../types';
+import { QRCodeImage } from './QRCodeImage';
+import { buildKioskUrl } from '../services/kioskUrl';
 
 interface DeviceDetailModalProps {
   device: Device;
@@ -53,7 +55,7 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [showPwaQr, setShowPwaQr] = useState(false);
 
-  const pwaUrl = `${window.location.origin}/?tab=player&kiosk=true&pwa=1&device=${device.code}`;
+  const pwaUrl = buildKioskUrl(window.location.origin, device.code);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -353,18 +355,14 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
 
             {showPwaQr && (
               <div className="mt-3 p-4 rounded-xl border border-cyan-500/30 bg-slate-950 flex flex-col sm:flex-row items-center gap-4 text-center sm:text-left">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(pwaUrl)}`}
-                  alt="QR PWA Player"
-                  className="w-28 h-28 rounded-lg bg-white p-1.5 border border-slate-700 flex-shrink-0"
-                />
+                <QRCodeImage value={pwaUrl} alt="QR PWA Player" size={112} className="h-28 w-28 rounded-lg bg-white p-1.5 border border-slate-700 flex-shrink-0" />
                 <div className="space-y-2 text-xs">
                   <div className="text-white font-bold">Instale o VeloPlayer TV neste veículo:</div>
                   <div className="text-[11px] text-slate-300 font-mono break-all bg-slate-900 p-2 rounded-lg border border-slate-800">
                     {pwaUrl}
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Ao escanear no tablet do motorista ({device.driverName}), o PWA inicia configurado automaticamente com o PIN <strong>8822</strong>.
+                    Ao escanear no tablet, o PWA inicia diretamente no player em modo quiosque simplificado.
                   </p>
                 </div>
               </div>

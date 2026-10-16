@@ -33,6 +33,8 @@ import {
 import confetti from 'canvas-confetti';
 import { Driver, Device, DriverReferral, Campaign, DriverPayoutRecord } from '../types';
 import { INITIAL_REFERRALS, INITIAL_DRIVER_PAYOUTS } from '../data/mockData';
+import { QRCodeImage } from './QRCodeImage';
+import { buildKioskUrl } from '../services/kioskUrl';
 
 interface DriverPortalProps {
   drivers: Driver[];
@@ -565,11 +567,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               </span>
 
               <div className="p-3 bg-white rounded-2xl shadow-xl border-4 border-cyan-500/30">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(`${window.location.origin}/?tab=player&kiosk=true&pwa=1&device=${driverDevice.code}`)}`}
-                  alt="QR Code Tela"
-                  className="w-32 h-32 rounded-lg"
-                />
+                <QRCodeImage value={buildKioskUrl(window.location.origin, driverDevice.code)} alt="QR Code Tela" size={128} className="h-32 w-32 rounded-lg" />
               </div>
 
               <p className="text-[11px] text-slate-400 max-w-xs">
