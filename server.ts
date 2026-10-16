@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { enforceProductionEnvironment } from './server/env';
+import { apiRateLimiter } from './server/rate-limit';
 
 async function startServer() {
   enforceProductionEnvironment();
@@ -68,6 +69,8 @@ async function startServer() {
     }
     next();
   });
+
+  app.use('/api', apiRateLimiter);
 
   app.use(cookieParser());
   app.use(express.json({ limit: '15mb' }));

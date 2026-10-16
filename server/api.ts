@@ -41,6 +41,13 @@ import {
   validateBody
 } from './schemas';
 import { pixGateway } from './billing';
+import {
+  adminRequestRateLimiter,
+  commandAckRateLimiter,
+  deviceRequestRateLimiter,
+  loginRequestRateLimiter,
+  publicPlayerRateLimiter,
+} from './rate-limit';
 import type { Device, Driver, Campaign, GeoFence, ProofOfPlayLog, AdvertiserAccount, SaaSInvoice } from '../src/types';
 
 export const apiRouter = Router();
@@ -76,7 +83,7 @@ apiRouter.get('/health', async (_req: Request, res: Response) => {
   });
 });
 
-apiRouter.get('/player/:deviceCode', async (req: Request, res: Response) => {
+apiRouter.get('/player/:deviceCode', publicPlayerRateLimiter, async (req: Request, res: Response) => {
   res.set('Cache-Control', 'no-store');
   const deviceCode = req.params.deviceCode;
   if (!deviceCode || deviceCode.length > 64) {
@@ -94,7 +101,7 @@ apiRouter.get('/player/:deviceCode', async (req: Request, res: Response) => {
 // ============================================================================
 // 2. AUTHENTICATION & SESSION
 // ============================================================================
-apiRouter.post('/auth/login', validateBody(LoginSchema), async (req: Request, res: Response): Promise<void> => {
+apiRouter.post('/auth/login', loginRequestRateLimiter, validateBody(LoginSchema), async (req: Request, res: Response): Promise<void> => {
   const ip = req.ip || 'unknown-ip';
   const { email, password } = req.body;
 
@@ -551,6 +558,7 @@ apiRouter.get('/proof-of-play', requireAuth, async (req: Request, res: Response)
 apiRouter.post(
   '/proof-of-play',
   requireDeviceAuth,
+  deviceRequestRateLimiter,
   validateBody(ProofOfPlaySubmissionSchema),
   async (req: Request, res: Response): Promise<void> => {
     const item = req.body;
@@ -678,7 +686,7 @@ apiRouter.post(
 // ============================================================================
 // 9. TELEMETRY & HARDWARE HEARTBEAT (Authenticated)
 // ============================================================================
-apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, validateBody(TelemetryHeartbeatSchema), async (req: Request, res: Response) => {
+apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, deviceRequestRateLimiter, validateBody(TelemetryHeartbeatSchema), async (req: Request, res: Response) => {
   const device = req.device!;
   const tenantId = req.resolvedTenantId!;
   const body = req.body;
@@ -717,7 +725,7 @@ apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, validateBody(Telemetry
 // ============================================================================
 // 10. REMOTE COMMANDS (MDM)
 // ============================================================================
-apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), validateBody(RemoteCommandSchema), async (req: Request, res: Response) => {
+apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), adminRequestRateLimiter, validateBody(RemoteCommandSchema), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
   const device = await repository.getDeviceById(req.body.deviceId, tenantId);
   if (!device) {
@@ -748,7 +756,7 @@ apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', '
   res.status(201).json({ success: true, commandId: cmdId });
 });
 
-apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, async (req: Request, res: Response) => {
+apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, commandAckRateLimiter, async (req: Request, res: Response) => {
   const tenantId = req.resolvedTenantId || await resolveTenant(req);
   const acknowledged = await repository.acknowledgeCommand(req.params.id, tenantId);
   if (!acknowledged) {
