@@ -28,6 +28,10 @@ export const QRCodeImage: React.FC<QRCodeImageProps> = ({ value, alt, size, clas
     return () => { isCurrent = false; };
   }, [value, size]);
 
+  if (!value) {
+    return <div className={`flex items-center justify-center text-center text-xs text-slate-500 ${className || ''}`} role="status">QR Code indisponível</div>;
+  }
+
   if (!dataUrl) {
     return <div className={`flex items-center justify-center text-center text-xs text-slate-500 ${className || ''}`} role="status">Gerando QR Code…</div>;
   }
