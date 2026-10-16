@@ -344,7 +344,7 @@ export function getVeloRepository(): VeloRepository {
   if (repository) return repository;
   const dbUrl = process.env.DATABASE_URL?.trim();
   if (process.env.NODE_ENV === 'production') {
-    if (!dbUrl) throw new Error('Production requires DATABASE_URL; JSON file storage is disabled.');
+    if (!dbUrl) throw new Error('O ambiente de produção exige DATABASE_URL; o armazenamento em arquivo JSON está desabilitado.');
     return repository = new PostgresRepository(dbUrl);
   }
   return repository = dbUrl ? new PostgresRepository(dbUrl) : new JsonDevelopmentRepository();

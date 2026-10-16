@@ -9,7 +9,7 @@ export function getRequiredSecret(name: string, devFallback?: string): string {
     return val.trim();
   }
   if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
-    throw new Error(`[FATAL SECURITY CONFIG] Environment variable '${name}' is required in strict production.`);
+    throw new Error(`[CONFIGURAÇÃO CRÍTICA DE SEGURANÇA] A variável de ambiente '${name}' é obrigatória em produção.`);
   }
   if (devFallback) {
     return devFallback;
