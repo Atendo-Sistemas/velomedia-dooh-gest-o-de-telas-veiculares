@@ -62,7 +62,8 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
     }
 
     const host = env.HOST?.trim();
-    if (host && !['127.0.0.1', '::1', 'localhost'].includes(host)) {
+    const dockerInternalBind = host === '0.0.0.0' && env.DOCKERIZED === 'true';
+    if (host && !['127.0.0.1', '::1', 'localhost'].includes(host) && !dockerInternalBind) {
       errors.push('HOST deve ser localhost ou um endereço de loopback em produção.');
     }
 

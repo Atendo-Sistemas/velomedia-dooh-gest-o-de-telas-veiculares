@@ -58,6 +58,16 @@ describe('production environment validation', () => {
     expect(result.errors).toContain('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
     expect(result.errors).toContain('HOST deve ser localhost ou um endereço de loopback em produção.');
   });
+
+  it('allows a Docker-internal bind only when the container deployment flag is set', () => {
+    const result = validateEnvironment({
+      ...validProductionEnv,
+      HOST: '0.0.0.0',
+      DOCKERIZED: 'true',
+    });
+
+    expect(result.valid).toBe(true);
+  });
 });
 
 describe('API write schemas', () => {

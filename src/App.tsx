@@ -20,6 +20,7 @@ import { DriverPortal } from './components/DriverPortal';
 import { AdvertiserPortal } from './components/AdvertiserPortal';
 import { PassengerPortal } from './components/PassengerPortal';
 import { RegistrationCenter } from './components/RegistrationCenter';
+import { LoginPage } from './components/LoginPage';
 import { Campaign, Device, Driver, GeoFence, ProofOfPlayLog, SaaSOrganization, SaaSUser, AdvertiserAccount } from './types';
 import { 
   INITIAL_CAMPAIGNS, 
@@ -77,6 +78,9 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>(getInitialActiveTab);
   const [isMasterMode, setIsMasterMode] = useState<boolean>(false);
+  const [authenticatedUser, setAuthenticatedUser] = useState<SaaSUser | null>(null);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
   
   // Primary persistent state
   const [devices, setDevices] = useState<Device[]>(INITIAL_DEVICES);
@@ -93,8 +97,27 @@ export default function App() {
 
   const currentOrg = organizations.find(o => o.id === currentOrgId) || organizations[0];
 
-  // Bootstrap live data from backend API
   useEffect(() => {
+    let isMounted = true;
+    apiClient.getMe()
+      .then(({ authenticated, user }) => {
+        if (!isMounted || !authenticated || !user) return;
+        setCurrentOrgId(user.organizationId);
+        setIsLoadingDashboard(true);
+        setAuthenticatedUser(user);
+      })
+      .catch(() => {
+        // A missing or expired session returns the user to the login page.
+      })
+      .finally(() => {
+        if (isMounted) setIsCheckingSession(false);
+      });
+    return () => { isMounted = false; };
+  }, []);
+
+  // Bootstrap live data from backend API after authentication
+  useEffect(() => {
+    if (!authenticatedUser) return;
     let isMounted = true;
     async function loadApiData() {
       try {
@@ -113,33 +136,54 @@ export default function App() {
         if (orgsRes.status === 'fulfilled' && orgsRes.value.length > 0) {
           setOrganizations(orgsRes.value);
         }
-        if (devsRes.status === 'fulfilled' && devsRes.value.length > 0) {
+        if (devsRes.status === 'fulfilled') {
           setDevices(devsRes.value);
         }
-        if (campsRes.status === 'fulfilled' && campsRes.value.length > 0) {
+        if (campsRes.status === 'fulfilled') {
           setCampaigns(campsRes.value);
         }
-        if (drvsRes.status === 'fulfilled' && drvsRes.value.length > 0) {
+        if (drvsRes.status === 'fulfilled') {
           setDrivers(drvsRes.value);
         }
-        if (gfsRes.status === 'fulfilled' && gfsRes.value.length > 0) {
+        if (gfsRes.status === 'fulfilled') {
           setGeoFences(gfsRes.value);
         }
-        if (popsRes.status === 'fulfilled' && popsRes.value.length > 0) {
+        if (popsRes.status === 'fulfilled') {
           setProofOfPlayLogs(popsRes.value);
         }
-        if (advsRes.status === 'fulfilled' && advsRes.value.length > 0) {
+        if (advsRes.status === 'fulfilled') {
           setAdvertisers(advsRes.value);
         }
       } catch (err) {
         console.info('[VeloMedia] Initializing with default seed state:', err);
+      } finally {
+        if (isMounted) setIsLoadingDashboard(false);
       }
     }
     loadApiData();
     return () => { isMounted = false; };
-  }, []);
+  }, [authenticatedUser]);
 
   const [apiError, setApiError] = useState<string | null>(null);
+
+  const handleLogin = async (email: string, password: string) => {
+    const result = await apiClient.login(email, password);
+    setCurrentOrgId(result.user.organizationId);
+    setIsMasterMode(false);
+    setIsLoadingDashboard(true);
+    setAuthenticatedUser(result.user);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await apiClient.logout();
+    } catch {
+      // Clear the local session even if the server is unavailable.
+    } finally {
+      setAuthenticatedUser(null);
+      setIsMasterMode(false);
+    }
+  };
 
   const handleUpdateOrg = async (updatedOrg: SaaSOrganization) => {
     const previous = [...organizations];
@@ -516,6 +560,21 @@ export default function App() {
   const activeDeviceForPlayer = devices.find((d) => d.id === activePlayerDeviceId) || devices[0];
   const onlineCount = devices.filter((d) => d.status === 'online').length;
 
+  if (activeTab !== 'player' && (isCheckingSession || (authenticatedUser && isLoadingDashboard))) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center" role="status">
+        <div className="flex items-center gap-3">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+          <span>Carregando operação…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (activeTab !== 'player' && !authenticatedUser) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
   // If in Pure Kiosk Player Mode, render full screen TV layout directly
   if (activeTab === 'player') {
     return (
@@ -552,6 +611,8 @@ export default function App() {
         currentOrg={currentOrg}
         isMasterMode={isMasterMode}
         onToggleMasterMode={() => setIsMasterMode(!isMasterMode)}
+        canAccessMaster={authenticatedUser?.role === 'platform_admin' || authenticatedUser?.role === 'super_admin'}
+        onLogout={handleLogout}
       />
 
       {/* Main Content View Container */}
@@ -807,4 +868,3 @@ export default function App() {
     </div>
   );
 }
-

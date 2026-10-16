@@ -131,6 +131,9 @@ export class VeloStorage {
         if (!parsed.deviceCredentials) parsed.deviceCredentials = [];
         if (!parsed.replayLogs) parsed.replayLogs = [];
         if (!parsed.webhooks) parsed.webhooks = [];
+        if (process.env.NODE_ENV === 'production') {
+          return this.ensureProductionSuperAdmin(parsed);
+        }
         return parsed;
       }
     } catch (err) {
@@ -141,6 +144,82 @@ export class VeloStorage {
     }
 
     return this.createSeedDatabase();
+  }
+
+  private ensureProductionSuperAdmin(schema: DatabaseSchema): DatabaseSchema {
+    if (schema.users.some(user => user.role === 'super_admin')) {
+      return schema;
+    }
+
+    const email = process.env.INITIAL_ADMIN_EMAIL!.trim().toLowerCase();
+    const password = process.env.INITIAL_ADMIN_PASSWORD!;
+    const now = new Date().toISOString();
+    let user = schema.users.find(existing => existing.email.toLowerCase() === email);
+    let organization = schema.organizations.find(org => org.id === user?.organizationId)
+      || schema.organizations.find(org => org.status === 'active')
+      || schema.organizations[0];
+
+    if (!organization) {
+      const name = process.env.INITIAL_ORGANIZATION_NAME?.trim() || 'VeloMedia';
+      organization = {
+        id: `org_${crypto.randomUUID()}`,
+        name,
+        slug: `velomedia-${crypto.randomUUID().slice(0, 8)}`,
+        cnpj: '',
+        city: '',
+        state: '',
+        planTier: 'starter',
+        activeScreensCount: 0,
+        maxScreensLimit: 5,
+        activeCampaignsCount: 0,
+        maxCampaignsLimit: 10,
+        activeDriversCount: 0,
+        maxDriversLimit: 5,
+        adminUser: { name: process.env.INITIAL_ADMIN_NAME?.trim() || 'Administrador', email, phone: '' },
+        billingEmail: email,
+        billingCycle: 'monthly',
+        nextBillingDate: now.slice(0, 10),
+        monthlySoftwareCost: 0,
+        estimatedGrossAdRevenue: 0,
+        driverPayoutTotal: 0,
+        netProfit: 0,
+        status: 'active',
+      };
+      schema.organizations.push(organization);
+    }
+
+    if (user) {
+      user.email = email;
+      user.role = 'super_admin';
+      user.organizationId = organization.id;
+      user.organizationName = organization.name;
+      user.status = 'active';
+      user.permissions = ['*'];
+      if (!user.passwordHash) {
+        user.passwordHash = hashPassword(password);
+      }
+    } else {
+      const name = process.env.INITIAL_ADMIN_NAME?.trim() || 'Administrador';
+      user = {
+        id: `user_${crypto.randomUUID()}`,
+        name,
+        email,
+        phone: '',
+        role: 'super_admin',
+        organizationId: organization.id,
+        organizationName: organization.name,
+        status: 'active',
+        permissions: ['*'],
+        createdAt: now,
+        passwordHash: hashPassword(password),
+      };
+      schema.users.push(user);
+      organization.adminUser = { name, email, phone: '' };
+      organization.billingEmail = email;
+    }
+
+    this.saveImmediate(schema);
+    return schema;
   }
 
   private createSeedDatabase(): DatabaseSchema {
@@ -189,7 +268,7 @@ export class VeloStorage {
         name: admin.name,
         email: admin.email,
         phone: admin.phone,
-        role: 'platform_admin',
+        role: 'super_admin',
         organizationId,
         organizationName,
         status: 'active',
@@ -402,7 +481,7 @@ export class VeloStorage {
           currentFps: 60,
           brightness: 85,
           volume: 40,
-          appVersion: '2.4.0-prod',
+          appVersion: '2.5.0-beta.1',
           lastHeartbeat: new Date().toISOString(),
           kioskLocked: true,
           screenUptimeTodayHours: 8.5,

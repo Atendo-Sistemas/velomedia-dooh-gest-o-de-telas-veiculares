@@ -53,7 +53,7 @@ apiRouter.get('/health', (_req: Request, res: Response) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.4.0-prod',
+    version: '2.5.0-beta.1',
     environment: process.env.NODE_ENV || 'production',
   });
 });
@@ -77,7 +77,7 @@ apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Res
 
   const user = storage.getUserByEmail(email);
 
-  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+  if (!user || user.status !== 'active' || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
     recordFailedLogin(ip);
     storage.logAudit({
       organizationId: user?.organizationId || 'system',
@@ -367,7 +367,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.4.0-prod',
+      appVersion: '2.5.0-beta.1',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
