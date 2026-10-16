@@ -1,8 +1,8 @@
-# Registros de Decisão Arquitetural (ADR) — VeloMedia DOOH
+# Registros de decisões arquiteturais (ADR) — VeloMedia DOOH
 
-## ADR-001: Arquitetura Full-Stack Integrada (Express + Vite)
+## ADR-001: Arquitetura integrada de frontend e backend (Express + Vite)
 - **Status:** Aceito.
-- **Contexto:** A plataforma precisa de uma API HTTP/REST protegida com autenticação server-side, cookies seguros e endpoints para dispositivos IoT, mantendo compatibilidade com a infraestrutura do AI Studio (Cloud Run, porta 3000 única).
+- **Contexto:** A plataforma precisa de uma API HTTP/REST protegida com autenticação no servidor, cookies seguros e endpoints para dispositivos IoT, mantendo compatibilidade com a infraestrutura do AI Studio (Cloud Run, porta 3000 única).
 - **Decisão:** Unificar o backend Express e o frontend Vite no arquivo `server.ts`. Em desenvolvimento, o Express utiliza `vite.middlewares`. Em produção, os arquivos estáticos compilados em `dist/` são servidos pelo Express e a API atende em `/api/v1/*`.
 - **Alternativas Rejeitadas:** Criar dois processos em portas distintas (incompatível com o proxy reverso do Cloud Run que só expõe a porta 3000).
 
@@ -12,19 +12,19 @@
 - **Decisão:** Cada dispositivo pareado recebe uma chave secreta (`deviceSecret`). Toda exibição gera um evento assinado com HMAC-SHA256 concatenando `eventId`, `deviceId`, `campaignId`, `startedAt`, `endedAt` e `nonce`. O backend recalcula e valida a assinatura antes de contabilizar faturamento ou repasse.
 - **Alternativas Rejeitadas:** Assinatura assimétrica RSA/ECDSA no browser (overhead de processamento desnecessário para tablets veiculares de baixo custo; HMAC é eficiente e seguro com segredo compartilhado).
 
-## ADR-003: Persistência Estruturada e Isolamento Multi-Tenant
+## ADR-003: Persistência estruturada e isolamento entre organizações
 - **Status:** Aceito.
-- **Contexto:** A aplicação precisa persistir organizações, usuários, telas, campanhas, geofences, motoristas e faturas sem perder dados entre recargas ou reinicializações.
-- **Decisão:** Implementar um motor de persistência relacional/estruturado com schema tipado e validação de tenant (`organizationId`) estrita em todas as operações de leitura e escrita. O tenant do operador é derivado da sessão autenticada.
+- **Contexto:** A aplicação precisa persistir organizações, usuários, telas, campanhas, áreas geográficas, motoristas e faturas sem perder dados entre recargas ou reinicializações.
+- **Decisão:** Implementar um mecanismo de persistência relacional/estruturado com esquema tipado e validação estrita da organização (`organizationId`) em todas as operações de leitura e escrita. A organização do operador é derivada da sessão autenticada.
 - **Alternativas Rejeitadas:** Armazenar dados no `localStorage` do navegador do operador (inseguro e não colaborativo entre múltiplos administradores).
 
-## ADR-004: Fila Local de PoP com Política Anti-Replay
+## ADR-004: Fila local de PoP com proteção contra repetição de requisições
 - **Status:** Aceito.
-- **Contexto:** Veículos transitam por túneis e áreas com sinal 4G/5G oscilante. O player não pode perder registros de exibição de anúncios.
+- **Contexto:** Veículos transitam por túneis e áreas com sinal 4G/5G instável. O player não pode perder registros de exibição de anúncios.
 - **Decisão:** O player armazena eventos na fila local com UUID e nonce único. Ao restabelecer a conexão, envia os logs em lote. O servidor descarta logs duplicados pelo `eventId` e rejeita eventos com timestamps anteriores a 7 dias.
-- **Alternativas Rejeitadas:** Descartar impressões quando offline (prejuízo grave a anunciantes e motoristas parceiros).
+- **Alternativas rejeitadas:** Descartar impressões quando estiver sem conexão (prejuízo grave a anunciantes e motoristas parceiros).
 
-## ADR-005: Integração de Pagamento & PIX com Adaptador Abstrato
+## ADR-005: Integração de pagamentos via PIX com adaptador abstrato
 - **Status:** Aceito.
 - **Contexto:** O sistema precisa emitir cobranças e permitir repasses aos motoristas via PIX sem acoplamento a um provedor proprietário único.
 - **Decisão:** Criar a interface `PaymentGatewayAdapter` com implementação completa para PIX (geração de payload EMV / BR Code e webhook com validação de HMAC) e modo de homologação/mock com dados auditáveis para desenvolvimento.

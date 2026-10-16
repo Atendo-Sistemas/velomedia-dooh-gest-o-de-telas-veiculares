@@ -1,12 +1,12 @@
-# Arquitetura de Produção — VeloMedia DOOH
+# Arquitetura de produção — VeloMedia DOOH
 
 ## 1. Visão Geral do Sistema
 
 O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de mídia digital out-of-home em telas veiculares (táxis, carros de aplicativo, frotas executivas). A solução engloba:
 
-- **Painel Administrativo & Gestão SaaS:** Cadastro e operação de anunciantes, campanhas, geofences, frotas, motoristas e faturamento.
-- **Player Kiosk PWA Veicular:** Aplicação cliente embarcada nos tablets automotivos, desenhada para operação *offline-first*, execução de playlists assinadas, captura de telemetria e registro inviolável de Proof of Play (PoP).
-- **Backend API & Ingestão IoT:** Servidor corporativo responsável por autenticação RBAC, isolamento estrito de tenants, distribuição de playlists, ingestão em lote de telemetria e validação criptográfica de PoP.
+- **Painel administrativo e gestão SaaS:** Cadastro e operação de anunciantes, campanhas, áreas geográficas, frotas, motoristas e faturamento.
+- **Player quiosque PWA veicular:** Aplicação cliente embarcada nos tablets automotivos, projetada para operação prioritariamente *offline*, execução de playlists assinadas, captura de telemetria e registro inviolável de Proof of Play (PoP).
+- **API de backend e ingestão IoT:** Servidor responsável pela autenticação RBAC, isolamento estrito entre organizações, distribuição de playlists, ingestão em lote de telemetria e validação criptográfica de PoP.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
@@ -49,12 +49,12 @@ O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de m�
   - `driver`: Extrato de corridas, saldo e chave PIX para repasse.
   - `device`: Credencial de longa duração gerada pós-pareamento para envio de telemetria e PoP.
 
-### 2.2. Isolamento Multi-Tenant
+### 2.2. Isolamento entre organizações
 - O payload JSONB de cada recurso de domínio contém o `organizationId`, acompanhado por uma coluna indexada `organization_id` no envelope PostgreSQL `repository_records`.
 - As consultas de recursos incluem o tenant resolvido da sessão; apenas administradores de plataforma podem selecionar outro tenant após validação da organização.
 - Para requisições de dispositivos (`device`), a autorização é atrelada à credencial do tablet vinculada à organização no momento do pareamento.
 
-### 2.3. Proof of Play (PoP) Criptográfico
+### 2.3. Proof of Play (PoP) criptográfico
 - O protótipo utilizava uma função com `Math.abs(hash)... ...d9a` vulnerável e não verificável.
 - Na arquitetura de produção, cada evento de exibição de anúncio gera um payload imutável:
   ```json
@@ -78,12 +78,12 @@ O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de m�
   2. A janela temporal implementada (timestamp recente; o endpoint PoP rejeita eventos com mais de 10 minutos de diferença do relógio do servidor).
   3. Prevenção de replay attacks (unicidade do `eventId` e do `nonce`).
 
-### 2.4. Player Veicular Offline-First
+### 2.4. Player veicular com operação offline prioritária
 - **Armazenamento Local:** As mídias (vídeos, banners, vinhetas) e a playlist ativa são cacheadas localmente no navegador/IndexedDB do dispositivo.
 - **Fila de PoP Desconectada:** Impressões ocorridas sem conectividade 4G/5G são persistidas em fila local estruturada.
 - **Sincronização Resiliente:** Assim que a rede é restabelecida, os logs são enviados em lotes (chunks de 20 eventos) com idempotência garantida.
 
-### 2.5. Billing & Repasse aos Motoristas
+### 2.5. Faturamento e repasses aos motoristas
 - Cálculo automático do split de receita:
   - **BYOD (Hardware do Motorista):** 45% do CPM apurado das impressões ativas na tela.
   - **Comodato (Hardware da Franquia):** 20% do CPM apurado.
@@ -95,7 +95,7 @@ O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de m�
 - Dados de domínio usam JSONB em `repository_records` para preservar integralmente os contratos TypeScript atuais. Sessões, credenciais de dispositivo, tokens de pareamento, ledger anti-replay, webhooks e comandos remotos usam tabelas dedicadas. O consumo de token é um único `UPDATE ... RETURNING`; PoP, replay e contadores usam uma transação com bloqueio de linhas.
 - `server/db/import-json.ts` importa uma cópia de um armazenamento JSON existente para um banco vazio sem alterar a fonte nem substituir hashes de senha importados.
 
-### 2.7. Bootstrap público do player
+### 2.7. Inicialização pública do player
 - `GET /api/v1/player/:deviceCode` é público e read-only para abrir QR/PWA sem sessão administrativa. Procura o código exato, recusa telas inexistentes/retiradas e carrega campanhas somente do tenant dono da tela.
-- Contrato estável (`PublicPlayerBootstrap` em `src/types.ts`): `{ device: { id, code, model, screenPosition, status }, campaigns: [{ id, name, advertiser, creative, schedule: { endDate } }], geoFences: [] }`. Campanhas ativas e elegíveis para a geofence da tela são filtradas no servidor e ordenadas por prioridade; budget/statistics, targeting, tenant columns, and the device location are not returned.
+- Contrato estável (`PublicPlayerBootstrap` em `src/types.ts`): `{ device: { id, code, model, screenPosition, status }, campaigns: [{ id, name, advertiser, creative, schedule: { endDate } }], geoFences: [] }`. As campanhas ativas e elegíveis para a área geográfica da tela são filtradas no servidor e ordenadas por prioridade; orçamento, estatísticas, critérios de segmentação, colunas da organização e localização do dispositivo não são retornados.
 - Não retorna organização, telemetria/localização, placa/motorista, número de série, credenciais, sessões, métricas ou dados de faturamento. Campos de `device` e `campaigns` são projeções explícitas no repositório, para JSON e PostgreSQL.

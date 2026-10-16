@@ -1,18 +1,18 @@
-# VeloMedia DOOH — Relatório de Remediação de Segurança & Auditoria V02
+# VeloMedia DOOH — Relatório de correção de segurança e auditoria V02
 
-**Data da Auditoria:** 17 de Setembro de 2026  
-**Auditor Responsável:** Equipe de Segurança & Arquitetura SaaS / IoT VeloMedia  
+**Data da auditoria:** 17 de setembro de 2026  
+**Auditor responsável:** Equipe de Segurança e Arquitetura SaaS / IoT VeloMedia  
 **Classificação:** Confidencial / Engenharia  
 
 ---
 
-## 1. Sumário Executivo & Diagnóstico Inicial
+## 1. Resumo executivo e diagnóstico inicial
 
 A auditoria de segurança realizada no código da V02 identificou vulnerabilidades críticas que impediam a operação em produção. Este documento cataloga todos os riscos encontrados, o plano de remediação implementado e a matriz de testes de validação.
 
-### Matriz de Vulnerabilidades e Riscos
+### Matriz de vulnerabilidades e riscos
 
-| ID | Componente | Severidade | Vulnerabilidade | Risco | Remediação Aplicada |
+| ID | Componente | Severidade | Vulnerabilidade | Risco | Correção aplicada |
 |---|---|---|---|---|---|
 | **SEC-01** | `server/auth.ts` | **CRÍTICA** | `resolveTenant` retornava `'org_sp_matriz'` para requisições anônimas | Vazamento massivo de dados multi-tenant sem autenticação | Remoção do fallback anônimo; exigência estrita de sessão ativa em todas as rotas privadas (`401`). |
 | **SEC-02** | `server/api.ts` | **ALTA** | Login retornava `token` no corpo JSON | Exposição do token a XSS no frontend | Sessão exclusiva via Cookie `HttpOnly`, `Secure` e `SameSite=Lax`. Remoção do token da resposta JSON. |
@@ -29,7 +29,7 @@ A auditoria de segurança realizada no código da V02 identificou vulnerabilidad
 
 ---
 
-## 2. Detalhamento Técnico das Correções
+## 2. Detalhamento técnico das correções
 
 ### 2.1 Autenticação e Gestão de Sessões
 - Criados middlewares dedicados:
@@ -40,7 +40,7 @@ A auditoria de segurança realizada no código da V02 identificou vulnerabilidad
 - Adicionado endpoint `POST /api/v1/auth/logout` que revoga ativamente o token na base de dados e limpa os cookies.
 - Rate limiting com mitigação contra ataques de força bruta no endpoint `POST /api/v1/auth/login`.
 
-### 2.2 Isolamento Multi-Tenant em Camada de Dados
+### 2.2 Isolamento entre organizações na camada de dados
 - Todos os métodos de consulta e escrita em `storage.ts` exigem o parâmetro `organizationId` (salvo consultas exclusivas de `super_admin` / `platform_admin` devidamente auditadas).
 - Métodos modificados:
   - `getDriverById(id, orgId)`
@@ -56,7 +56,7 @@ A auditoria de segurança realizada no código da V02 identificou vulnerabilidad
   - `getInvoiceById(id, orgId)`
 - Qualquer tentativa de acesso a ID existente em outro tenant resulta em `404 Not Found`.
 
-### 2.3 Criptografia de Dispositivo e Proof-of-Play (Anti-Replay)
+### 2.3 Criptografia de dispositivo e registro de exibição (proteção contra repetição)
 - Cada tablet recebe um segredo único (`deviceSecret`) durante o processo de pareamento.
 - O payload de PoP deve ser assinado pelo dispositivo antes do envio.
 - O servidor valida:
@@ -68,6 +68,6 @@ A auditoria de segurança realizada no código da V02 identificou vulnerabilidad
 
 ---
 
-## 3. Matriz de Testes Automatizados
+## 3. Matriz de testes automatizados
 
 Os testes existentes em `tests/` cobrem configuração de ambiente/esquemas, autenticação e criptografia. `tests/postgres-repository.test.ts` contém integração opcional de token de pareamento atômico, isolamento de tenant e contadores PoP; ela requer `VELOMEDIA_TEST_DATABASE_URL` apontando a um banco PostgreSQL de teste.
