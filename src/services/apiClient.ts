@@ -7,7 +7,8 @@ import type {
   SaaSOrganization, 
   SaaSUser, 
   AdvertiserAccount, 
-  SaaSInvoice 
+  SaaSInvoice,
+  PublicPlayerBootstrap,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -50,6 +51,9 @@ export const apiClient = {
   },
   async getMe(): Promise<{ authenticated: boolean; user?: SaaSUser; organization?: SaaSOrganization }> {
     return request('/auth/me');
+  },
+  async getPublicPlayer(deviceCode: string): Promise<PublicPlayerBootstrap> {
+    return request<PublicPlayerBootstrap>(`/player/${encodeURIComponent(deviceCode)}`);
   },
 
   // Organizations
@@ -212,8 +216,14 @@ export const apiClient = {
   async getInvoices(): Promise<SaaSInvoice[]> {
     return request<SaaSInvoice[]>('/invoices');
   },
-  async chargeInvoicePix(invoiceId: string): Promise<any> {
-    return request(`/invoices/${invoiceId}/charge-pix`, {
+  async chargeInvoicePix(invoiceId: string): Promise<{
+    success: boolean;
+    txid: string;
+    copiaECola: string;
+    qrCodeUrl: string;
+    expiresAt?: string;
+  }> {
+    return request(`/invoices/${encodeURIComponent(invoiceId)}/charge-pix`, {
       method: 'POST',
     });
   },

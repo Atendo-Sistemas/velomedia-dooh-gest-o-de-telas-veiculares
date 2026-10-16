@@ -25,7 +25,8 @@ import {
   Sparkles,
   Activity,
   CheckCircle2,
-  QrCode
+  QrCode,
+  LogOut
 } from 'lucide-react';
 import { SaaSOrganization } from '../types';
 
@@ -57,6 +58,8 @@ interface NavbarProps {
   currentOrg: SaaSOrganization;
   isMasterMode: boolean;
   onToggleMasterMode: () => void;
+  canAccessMaster: boolean;
+  onLogout: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -72,6 +75,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentOrg,
   isMasterMode,
   onToggleMasterMode,
+  canAccessMaster,
+  onLogout,
 }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -144,6 +149,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span className="hidden sm:inline">Player na TV</span>
                   <span className="sm:hidden">Player</span>
                 </button>
+                <button
+                  onClick={onLogout}
+                  title="Encerrar sessão"
+                  className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-bold text-slate-200 transition hover:bg-slate-700"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Sair</span>
+                </button>
               </div>
             </div>
           ) : (
@@ -176,14 +189,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
 
                 {/* Master Super Admin Quick Switcher (Desktop only) */}
-                <button
-                  onClick={onToggleMasterMode}
-                  title="Abrir Módulo Master de Gestão de Franquias & Quotas"
-                  className="hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-500/40"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>SaaS Master</span>
-                </button>
+                {canAccessMaster && (
+                  <button
+                    onClick={onToggleMasterMode}
+                    title="Abrir Módulo Master de Gestão de Franquias & Quotas"
+                    className="hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-500/40"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>SaaS Master</span>
+                  </button>
+                )}
 
                 <button
                   onClick={() => handleSelectTab('registrations')}
@@ -304,6 +319,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span className="hidden xs:inline sm:inline">
                     {activeTab === 'player' ? 'Player Ativo' : 'Player TV'}
                   </span>
+                </button>
+                <button
+                  onClick={onLogout}
+                  title="Encerrar sessão"
+                  aria-label="Encerrar sessão"
+                  className="rounded-xl border border-slate-700 bg-slate-800 p-2 text-slate-200 transition hover:bg-slate-700"
+                >
+                  <LogOut className="h-4 w-4" />
                 </button>
 
                 {/* Mobile Menu Toggle Button (Mobile only) */}
@@ -506,21 +529,23 @@ export const Navbar: React.FC<NavbarProps> = ({
                   })}
 
                   {/* SaaS Master Super Admin Option */}
-                  <button
-                    onClick={() => {
-                      onToggleMasterMode();
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold text-indigo-300 bg-indigo-950/40 border border-indigo-500/30 hover:bg-indigo-900/60 transition mt-2"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <ShieldCheck className="w-4 h-4 text-indigo-400" />
-                      <span>{isMasterMode ? 'Voltar à Franquia' : 'Painel SaaS Master'}</span>
-                    </div>
-                    <span className="text-[10px] uppercase px-2 py-0.5 bg-indigo-500/20 rounded-full font-bold">
-                      Admin
-                    </span>
-                  </button>
+                  {canAccessMaster && (
+                    <button
+                      onClick={() => {
+                        onToggleMasterMode();
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold text-indigo-300 bg-indigo-950/40 border border-indigo-500/30 hover:bg-indigo-900/60 transition mt-2"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <ShieldCheck className="w-4 h-4 text-indigo-400" />
+                        <span>{isMasterMode ? 'Voltar à Franquia' : 'Painel SaaS Master'}</span>
+                      </div>
+                      <span className="text-[10px] uppercase px-2 py-0.5 bg-indigo-500/20 rounded-full font-bold">
+                        Admin
+                      </span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Mobile Quick Hardware Tools */}

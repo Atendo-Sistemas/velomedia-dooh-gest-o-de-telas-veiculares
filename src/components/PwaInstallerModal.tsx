@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Device } from '../types';
+import { buildKioskUrl } from '../services/kioskUrl';
+import { QRCodeImage } from './QRCodeImage';
 
 interface PwaInstallerModalProps {
   isOpen: boolean;
@@ -71,13 +73,11 @@ export const PwaInstallerModal: React.FC<PwaInstallerModalProps> = ({
     };
   }, []);
 
-  if (!isOpen) return null;
-
   const selectedDevice = devices.find(d => d.id === selectedDeviceId) || devices[0];
   
-  // Construct direct PWA launch URL
-  const origin = window.location.origin;
-  const pwaPlayerUrl = `${origin}/?tab=player&kiosk=true&pwa=1&device=${selectedDevice?.code || 'TV-SP-8491'}`;
+  const pwaPlayerUrl = buildKioskUrl(window.location.origin, selectedDevice?.code);
+
+  if (!isOpen) return null;
 
   const handleInstallClick = async () => {
     if (deferredPrompt) {
@@ -103,7 +103,7 @@ export const PwaInstallerModal: React.FC<PwaInstallerModalProps> = ({
   };
 
   const handleLaunchNow = () => {
-    onLaunchPlayer(selectedDevice.id);
+    if (selectedDevice) onLaunchPlayer(selectedDevice.id);
     onClose();
   };
 
@@ -246,21 +246,17 @@ export const PwaInstallerModal: React.FC<PwaInstallerModalProps> = ({
               <div className="grid grid-cols-2 gap-3 p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-xs">
                 <div>
                   <span className="text-slate-400 block text-[10px]">Motorista Parceiro:</span>
-                  <span className="font-bold text-white">{selectedDevice.driverName}</span>
+                  <span className="font-bold text-white">{selectedDevice?.driverName || 'Não atribuído'}</span>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[10px]">Placa / Carro:</span>
-                  <span className="font-mono text-cyan-300 font-bold">{selectedDevice.carPlate}</span>
+                  <span className="font-mono text-cyan-300 font-bold">{selectedDevice?.carPlate || '—'}</span>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[10px]">Tipo de Equipamento:</span>
                   <span className="text-slate-300 font-medium">
-                    {selectedDevice.hardwareOwnership === 'driver_byod' ? 'BYOD (Tablet do Motorista - 45%)' : 'Comodato da Empresa (20%)'}
+                    {selectedDevice?.hardwareOwnership === 'driver_byod' ? 'BYOD' : 'Equipamento da empresa'}
                   </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Senha PIN Kiosk:</span>
-                  <span className="font-mono text-emerald-400 font-bold">8822 (Padrão)</span>
                 </div>
               </div>
 
@@ -275,11 +271,13 @@ export const PwaInstallerModal: React.FC<PwaInstallerModalProps> = ({
 
               {/* Dynamic QR Code Render */}
               <div className="p-3 bg-white rounded-2xl shadow-xl border-4 border-cyan-500/30">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(pwaPlayerUrl)}`}
-                  alt="QR Code PWA Player"
-                  className="w-36 h-36 rounded-lg"
-                />
+                {selectedDevice ? (
+                  <QRCodeImage value={pwaPlayerUrl} alt="QR Code do player em modo quiosque" size={144} className="h-36 w-36 rounded-lg" />
+                ) : (
+                  <div className="flex h-36 w-36 items-center justify-center text-xs text-slate-600">
+                    {selectedDevice ? 'Gerando QR Code…' : 'Nenhuma tela cadastrada'}
+                  </div>
+                )}
               </div>
 
               <p className="text-[11px] text-slate-400 max-w-xs leading-relaxed">
@@ -453,7 +451,7 @@ export const PwaInstallerModal: React.FC<PwaInstallerModalProps> = ({
               <Lock className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
               <div>
                 <span className="text-xs font-bold text-white block">Bloqueio Kiosk com PIN</span>
-                <span className="text-[11px] text-slate-400">Passageiros não conseguem sair ou fechar o player sem a senha master (8822).</span>
+                <span className="text-[11px] text-slate-400">O link de quiosque abre o player sem os controles administrativos.</span>
               </div>
             </div>
 

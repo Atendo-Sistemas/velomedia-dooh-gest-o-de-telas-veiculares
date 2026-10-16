@@ -3,8 +3,6 @@
  * Enforces fail-fast validation before the HTTP server binds to any port.
  */
 
-import path from 'node:path';
-
 export interface EnvValidationResult {
   valid: boolean;
   missing: string[];
@@ -19,7 +17,7 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
     const requiredVars = [
       'WEBHOOK_SECRET',
       'CORS_ALLOWED_ORIGINS',
-      'DATA_FILE_PATH',
+      'DATABASE_URL',
       'INITIAL_ADMIN_EMAIL',
       'INITIAL_ADMIN_PASSWORD',
     ];
@@ -34,6 +32,21 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
 
     if (env.BYPASS_ENV_CHECK === 'true') {
       errors.push('BYPASS_ENV_CHECK é proibido em ambiente de produção.');
+    }
+
+    if (env.PIX_GATEWAY_PROVIDER === 'asaas') {
+      for (const name of ['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN']) {
+        if (!env[name]?.trim()) {
+          missing.push(name);
+          errors.push(`Variável obrigatória para Asaas '${name}' ausente ou vazia.`);
+        }
+      }
+      if (env.ASAAS_ENVIRONMENT && !['sandbox', 'production'].includes(env.ASAAS_ENVIRONMENT)) {
+        errors.push('ASAAS_ENVIRONMENT deve ser sandbox ou production.');
+      }
+      if (env.ASAAS_WEBHOOK_TOKEN && (env.ASAAS_WEBHOOK_TOKEN.length < 32 || env.ASAAS_WEBHOOK_TOKEN.length > 255 || /\s/.test(env.ASAAS_WEBHOOK_TOKEN))) {
+        errors.push('ASAAS_WEBHOOK_TOKEN deve ter entre 32 e 255 caracteres e não conter espaços.');
+      }
     }
 
     const webhookSecret = env.WEBHOOK_SECRET?.trim();
@@ -51,18 +64,27 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       errors.push('INITIAL_ADMIN_EMAIL deve ser um endereço de e-mail válido.');
     }
 
-    const dataFilePath = env.DATA_FILE_PATH?.trim();
-    if (dataFilePath && !path.isAbsolute(dataFilePath)) {
-      errors.push('DATA_FILE_PATH deve ser um caminho absoluto em armazenamento persistente.');
-    } else if (dataFilePath) {
-      const relativePath = path.relative('/var/lib/velomedia', path.resolve(dataFilePath));
-      if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
-        errors.push('DATA_FILE_PATH deve apontar para um arquivo dentro de /var/lib/velomedia.');
+    const databaseUrl = env.DATABASE_URL?.trim();
+    if (databaseUrl) {
+      try {
+        const parsed = new URL(databaseUrl);
+        if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
+          errors.push('DATABASE_URL deve ser uma URL PostgreSQL com host e database configurados.');
+        }
+      } catch {
+        errors.push('DATABASE_URL deve ser uma URL PostgreSQL válida.');
       }
+    }
+    if (env.PG_POOL_MAX && (!/^\d+$/.test(env.PG_POOL_MAX) || Number(env.PG_POOL_MAX) < 1 || Number(env.PG_POOL_MAX) > 100)) {
+      errors.push('PG_POOL_MAX deve ser um inteiro entre 1 e 100.');
+    }
+    if (env.PGSSL && !['true', 'false'].includes(env.PGSSL.toLowerCase())) {
+      errors.push('PGSSL deve ser true ou false.');
     }
 
     const host = env.HOST?.trim();
-    if (host && !['127.0.0.1', '::1', 'localhost'].includes(host)) {
+    const dockerInternalBind = host === '0.0.0.0' && env.DOCKERIZED === 'true';
+    if (host && !['127.0.0.1', '::1', 'localhost'].includes(host) && !dockerInternalBind) {
       errors.push('HOST deve ser localhost ou um endereço de loopback em produção.');
     }
 

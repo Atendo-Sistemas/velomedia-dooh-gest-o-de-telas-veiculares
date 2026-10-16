@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 import { 
   Tv, 
   MapPin, 
@@ -31,16 +32,17 @@ import {
   Sparkles
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { Campaign, Device, GeoFence, ProofOfPlayLog } from '../types';
+import { Campaign, Device, GeoFence, ProofOfPlayLog, PublicPlayerCampaign, PublicPlayerDevice } from '../types';
 import { PASSENGER_TRIVIA, CITY_NEWS } from '../data/mockData';
 import { generateProofOfPlayHash, getMatchingGeoFences, isCampaignEligible } from '../services/telemetryEngine';
 
 export type ScreenAspectFormat = 'fullscreen_fill' | 'ratio_16_9' | 'ratio_16_10' | 'ratio_4_3';
 
 interface KioskPlayerProps {
-  device: Device;
-  campaigns: Campaign[];
+  device: Device | PublicPlayerDevice;
+  campaigns: Array<Campaign | PublicPlayerCampaign>;
   geoFences: GeoFence[];
+  simplified?: boolean;
   onExitPlayer: () => void;
   onRecordProofOfPlay: (log: ProofOfPlayLog) => void;
   onUpdateDeviceLocation: (deviceId: string, lat: number, lng: number, address: string, neighborhood: string) => void;
@@ -50,6 +52,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
   device,
   campaigns,
   geoFences,
+  simplified = false,
   onExitPlayer,
   onRecordProofOfPlay,
   onUpdateDeviceLocation,
@@ -87,6 +90,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
   const [showTriviaModal, setShowTriviaModal] = useState(false);
   const [showTechMenu, setShowTechMenu] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
+  const [campaignQr, setCampaignQr] = useState('');
 
   // Trivia state
   const [activeTriviaIndex, setActiveTriviaIndex] = useState(0);
@@ -140,20 +144,46 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
     };
   }, []);
 
-  // Get eligible campaigns based on current device location
-  const matchingGfs = getMatchingGeoFences(device.currentLocation.lat, device.currentLocation.lng, geoFences);
-  const eligibleCampaigns = campaigns.filter((c) => isCampaignEligible(c, device, geoFences));
-  const activeCampaignList = eligibleCampaigns.length > 0 ? eligibleCampaigns : campaigns;
+  // Public kiosk bootstrap data has no telemetry location; its playlist is already tenant-filtered.
+  const deviceLocation = 'currentLocation' in device ? device.currentLocation : undefined;
+  const matchingGfs = deviceLocation
+    ? getMatchingGeoFences(deviceLocation.lat, deviceLocation.lng, geoFences)
+    : [];
+  const eligibleCampaigns = deviceLocation
+    ? campaigns.filter((campaign): campaign is Campaign =>
+      'budgetTotal' in campaign && isCampaignEligible(campaign, device as Device, geoFences))
+    : campaigns;
+  const activeCampaignList = eligibleCampaigns;
 
-  const currentCampaign = activeCampaignList[currentCampaignIndex % activeCampaignList.length] || campaigns[0];
+  const currentCampaign = activeCampaignList[currentCampaignIndex % activeCampaignList.length] || (simplified ? undefined : campaigns[0]);
+
+  useEffect(() => {
+    const value = currentCampaign?.creative.qrCodeUrl || currentCampaign?.creative.couponCode || '';
+    if (!value) {
+      setCampaignQr('');
+      return;
+    }
+
+    let isCurrent = true;
+    QRCode.toDataURL(value, { width: 320, margin: 1, errorCorrectionLevel: 'M' })
+      .then(dataUrl => {
+        if (isCurrent) setCampaignQr(dataUrl);
+      })
+      .catch(() => {
+        if (isCurrent) setCampaignQr('');
+      });
+    return () => { isCurrent = false; };
+  }, [currentCampaign?.id, currentCampaign?.creative.qrCodeUrl, currentCampaign?.creative.couponCode]);
 
   // Playback timer & PoP generator
   useEffect(() => {
     const timer = setInterval(() => {
       setSecondsRemaining((prev) => {
         if (prev <= 1) {
+          if (activeCampaignList.length === 0) return 15;
+
           // Record Proof of Play
-          if (currentCampaign) {
+          if (currentCampaign && deviceLocation) {
             const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
             const popLog: ProofOfPlayLog = {
               id: `pop_${Date.now()}`,
@@ -163,7 +193,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               campaignName: currentCampaign.name,
               advertiser: currentCampaign.advertiser,
               durationWatchedSec: currentCampaign.creative.durationSeconds || 15,
-              location: device.currentLocation,
+              location: deviceLocation,
               interacted: false,
               verifiedHash: generateProofOfPlayHash(device.id, currentCampaign.id, timestamp),
               syncedOnline: device.status === 'online',
@@ -366,6 +396,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       origin: { y: 0.7 },
     });
 
+    if (!deviceLocation) return;
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     onRecordProofOfPlay({
       id: `pop_scan_${Date.now()}`,
@@ -375,7 +406,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       campaignName: currentCampaign.name,
       advertiser: currentCampaign.advertiser,
       durationWatchedSec: 15,
-      location: device.currentLocation,
+      location: deviceLocation,
       interacted: true,
       interactionType: 'qr_scan',
       verifiedHash: generateProofOfPlayHash(device.id, currentCampaign.id, timestamp),
@@ -433,6 +464,17 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
     }
   };
 
+  if (!currentCampaign) {
+    return (
+      <main className="flex min-h-screen w-screen items-center justify-center bg-slate-950 px-6 text-center text-white">
+        <div className="max-w-lg space-y-3">
+          <h1 className="text-2xl font-bold">VeloMedia</h1>
+          <p className="text-sm text-slate-300">Nenhuma campanha está disponível para esta tela no momento.</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <div 
       className={`select-none bg-black overflow-hidden flex flex-col items-center justify-center transition-all duration-300 ${
@@ -451,6 +493,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
         {/* ========================================================================= */}
         {/* TOP STATUS & CONTROL BAR (Passenger info + Lock Status + Secret PIN)      */}
         {/* ========================================================================= */}
+        {!simplified && (
         <div className="bg-slate-950/95 backdrop-blur-md px-3 sm:px-6 py-2 sm:py-2.5 border-b border-slate-800/80 flex items-center justify-between text-slate-200 z-20 flex-shrink-0">
           
           {/* Left: Driver & Car details */}
@@ -460,13 +503,13 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="text-xs font-bold text-white truncate max-w-[110px] sm:max-w-none">{device.driverName}</span>
+                <span className="text-xs font-bold text-white truncate max-w-[110px] sm:max-w-none">{'driverName' in device ? device.driverName : 'Tela veicular'}</span>
                 <span className="text-[10px] bg-slate-800 text-cyan-300 font-mono px-1.5 py-0.2 rounded font-semibold border border-slate-700">
-                  {device.carPlate}
+                  {'carPlate' in device ? device.carPlate : device.code}
                 </span>
               </div>
               <div className="text-[10px] text-slate-400 flex items-center space-x-1">
-                <span>{device.carModel}</span>
+                <span>{'carModel' in device ? device.carModel : device.model}</span>
                 <span>•</span>
                 <span className="text-emerald-400 font-semibold">★ 4.98</span>
               </div>
@@ -489,7 +532,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
             
             <MapPin className="w-3.5 h-3.5 text-cyan-400 animate-bounce" />
             <span className="text-xs font-medium text-slate-300 truncate max-w-[180px]">
-              {device.currentLocation.neighborhood || 'Av. Paulista, SP'}
+              {deviceLocation?.neighborhood || 'Localização indisponível'}
             </span>
             {matchingGfs.length > 0 && (
               <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full font-bold">
@@ -611,14 +654,15 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
           </div>
 
         </div>
+        )}
 
         {/* ========================================================================= */}
         {/* TV MAIN CONTENT AREA (Split Layout: Creative Media + Interactive Widgets) */}
         {/* ========================================================================= */}
-        <div className="relative flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden bg-slate-950">
+        <div className={`relative flex-1 grid grid-cols-1 ${simplified ? '' : 'lg:grid-cols-12'} overflow-hidden bg-slate-950`}>
           
           {/* Main Visual Display (8 cols on large screens) */}
-          <div className="lg:col-span-8 relative flex flex-col justify-between p-4 sm:p-7 min-h-[340px] overflow-hidden">
+          <div className={`${simplified ? '' : 'lg:col-span-8'} relative flex flex-col justify-between p-4 sm:p-7 min-h-[340px] overflow-hidden`}>
             
             {/* Background Creative Video or Image with Gradient Overlay */}
             {isVideoMedia(currentCampaign.creative.mediaUrl, currentCampaign.creative.type) ? (
@@ -715,6 +759,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
           </div>
 
           {/* Right Side: Passenger Utilities & Interactive Widgets (4 cols) */}
+          {!simplified && (
           <div className="lg:col-span-4 bg-slate-900/95 border-t lg:border-t-0 lg:border-l border-slate-800 p-4 sm:p-5 flex flex-col justify-between space-y-3 overflow-y-auto">
             
             {/* Widget 1: Live Ride Route Status */}
@@ -725,7 +770,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               </div>
               <div className="flex items-center space-x-2">
                 <Navigation className="w-4 h-4 text-cyan-400 flex-shrink-0" />
-                <span className="text-xs font-bold text-white truncate">{device.currentLocation.address || 'Av. Paulista, 1578'}</span>
+                <span className="text-xs font-bold text-white truncate">{deviceLocation?.address || device.model}</span>
               </div>
               <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                 <div className="bg-cyan-400 h-full rounded-full w-2/3 animate-pulse" />
@@ -797,8 +842,8 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
                 {CITY_NEWS[0].title}
               </p>
             </div>
-
           </div>
+          )}
 
         </div>
 
@@ -807,7 +852,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       {/* ========================================================================= */}
       {/* MODAL: KIOSK PIN CODE KEYPAD MODAL (SECURITY LOCKDOWN PROTECTION)        */}
       {/* ========================================================================= */}
-      {showPinModal && (
+      {!simplified && showPinModal && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
           <div className="bg-slate-900 border-2 border-indigo-500/50 rounded-3xl p-6 max-w-sm w-full shadow-2xl relative text-center space-y-4">
             
@@ -916,7 +961,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       {/* ========================================================================= */}
       {/* MODAL: SCREEN FORMAT & ASPECT RATIO MODAL                                 */}
       {/* ========================================================================= */}
-      {showFormatModal && (
+      {!simplified && showFormatModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
           <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl relative space-y-4">
             
@@ -994,9 +1039,12 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
 
             {/* QR Code Box */}
             <div className="bg-white p-4 rounded-2xl mx-auto inline-block shadow-lg">
-              <div className="w-44 h-44 bg-slate-950 p-2 rounded-xl flex items-center justify-center flex-col space-y-2">
-                <QrCode className="w-32 h-32 text-cyan-400" />
-                <span className="text-[9px] text-slate-400 font-mono">APONTE A CÂMERA DO CELULAR</span>
+              <div className="w-44 h-44 bg-white p-1 rounded-xl flex items-center justify-center">
+                {campaignQr ? (
+                  <img src={campaignQr} alt="QR Code da oferta" className="h-full w-full" />
+                ) : (
+                  <span className="px-4 text-xs text-slate-600">Cupom: {currentCampaign.creative.couponCode || 'indisponível'}</span>
+                )}
               </div>
             </div>
 
@@ -1047,16 +1095,18 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               {currentCampaign.creative.fullInfoHtml || currentCampaign.creative.tagline}
             </p>
 
-            <div className="p-3 bg-slate-800/60 rounded-xl space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Região de Atendimento:</span>
-                <span className="text-white font-medium">{device.currentLocation.neighborhood}</span>
+            {!simplified && (
+              <div className="p-3 bg-slate-800/60 rounded-xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Região de Atendimento:</span>
+                  <span className="text-white font-medium">{deviceLocation?.neighborhood || 'Localização indisponível'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Oferta Válida Até:</span>
+                  <span className="text-white font-medium">{currentCampaign.schedule.endDate}</span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Oferta Válida Até:</span>
-                <span className="text-white font-medium">{currentCampaign.schedule.endDate}</span>
-              </div>
-            </div>
+            )}
 
             <button
               onClick={() => {
@@ -1074,7 +1124,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       {/* ========================================================================= */}
       {/* MODAL 3: Technician PIN & Hardware Diagnostics Menu                       */}
       {/* ========================================================================= */}
-      {showTechMenu && (
+      {!simplified && showTechMenu && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
           <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl relative text-slate-200">
             <button
@@ -1100,7 +1150,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               </div>
               <div className="p-3 bg-slate-800/60 rounded-xl">
                 <span className="text-slate-400 block">Tensão Bateria:</span>
-                <span className="font-mono font-bold text-white">{device.telemetry.batteryVoltage}V</span>
+                <span className="font-mono font-bold text-white">{'telemetry' in device ? `${device.telemetry.batteryVoltage}V` : '—'}</span>
               </div>
               <div className="p-3 bg-slate-800/60 rounded-xl">
                 <span className="text-slate-400 block">Fila Offline PoP:</span>

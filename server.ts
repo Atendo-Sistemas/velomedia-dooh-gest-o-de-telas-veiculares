@@ -5,10 +5,13 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { enforceProductionEnvironment } from './server/env';
+import { apiRateLimiter } from './server/rate-limit';
 
 async function startServer() {
   enforceProductionEnvironment();
 
+  const repositoryModule = await import('./server/repository');
+  await repositoryModule.initializeVeloRepository();
   const [{ apiRouter }, { authMiddleware }] = await Promise.all([
     import('./server/api'),
     import('./server/auth'),
@@ -67,12 +70,16 @@ async function startServer() {
     next();
   });
 
+  app.use('/api', apiRateLimiter);
+
   app.use(cookieParser());
   app.use(express.json({ limit: '15mb' }));
   app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
   // Attach session & device authentication
-  app.use(authMiddleware);
+  app.use((req, res, next) => {
+    Promise.resolve(authMiddleware(req, res, next)).catch(next);
+  });
 
   // Mount versioned API routes FIRST
   app.use('/api/v1', apiRouter);
@@ -94,9 +101,29 @@ async function startServer() {
     });
   }
 
-  app.listen(port, host, () => {
+  const server = app.listen(port, host, () => {
     console.log(`[VeloMedia DOOH] Server running on http://${host}:${port}`);
   });
+
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[VeloMedia DOOH] ${signal} received; closing HTTP and database pools.`);
+    server.close(async error => {
+      try {
+        await repositoryModule.closeVeloRepository();
+        if (error) throw error;
+        process.exit(0);
+      } catch (shutdownError) {
+        console.error('[VeloMedia DOOH] Graceful shutdown failed:', shutdownError);
+        process.exit(1);
+      }
+    });
+    setTimeout(() => process.exit(1), 15_000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer().catch((err) => {

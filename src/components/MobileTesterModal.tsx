@@ -18,6 +18,8 @@ import {
   Globe
 } from 'lucide-react';
 import { Device, Driver } from '../types';
+import { QRCodeImage } from './QRCodeImage';
+import { buildKioskUrl } from '../services/kioskUrl';
 
 interface MobileTesterModalProps {
   device?: Device;
@@ -33,12 +35,11 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
   onLaunchPlayer
 }) => {
   const [copied, setCopied] = useState(false);
-  const [activeStep, setActiveStep] = useState<number>(1);
-  const [deviceCode, setDeviceCode] = useState(device?.code || 'TV-SP-8491');
+  const deviceCode = device?.code || '';
 
   // Direct live URL of the player
   const currentOrigin = window.location.origin;
-  const directPlayerUrl = `${currentOrigin}/?tab=player&device=${deviceCode}`;
+  const directPlayerUrl = device ? buildKioskUrl(currentOrigin, deviceCode) : '';
 
   const handleCopyUrl = () => {
     navigator.clipboard.writeText(directPlayerUrl);
@@ -85,12 +86,7 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
             
             {/* Left QR Code Container */}
             <div className="sm:col-span-5 flex flex-col items-center justify-center text-center p-3 bg-white rounded-xl shadow-md border border-slate-300">
-              {/* Dynamic QR Code Generator via SVG / API */}
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(directPlayerUrl)}&color=0f172a&bgcolor=ffffff&margin=1`}
-                alt="QR Code para conectar celular"
-                className="w-40 h-40 sm:w-44 sm:h-44 object-contain rounded-lg"
-              />
+              <QRCodeImage value={device ? directPlayerUrl : ''} alt="QR Code para abrir o player em modo quiosque" size={176} className="h-40 w-40 rounded-lg sm:h-44 sm:w-44" />
               <span className="mt-2 text-[11px] font-bold text-slate-800 flex items-center space-x-1">
                 <QrCode className="w-3.5 h-3.5 text-blue-600 inline mr-1" />
                 Aponte a câmera do celular
@@ -112,7 +108,8 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
                   />
                   <button
                     onClick={handleCopyUrl}
-                    className="flex-shrink-0 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg border border-slate-600 transition flex items-center space-x-1"
+                    disabled={!device}
+                    className="flex-shrink-0 px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-white rounded-lg border border-slate-600 transition flex items-center space-x-1"
                     title="Copiar Link"
                   >
                     {copied ? (
@@ -136,7 +133,7 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
                   Conexão Instantânea com a Central
                 </p>
                 <p className="text-slate-300">
-                  O celular conectará ao nó <strong>{deviceCode}</strong> via WebSockets/MQTT, transmitindo GPS em tempo real e gravando Proof-of-Play.
+                  O QR Code abre o player associado a esta tela. As campanhas exibidas dependem da configuração e da disponibilidade do serviço.
                 </p>
               </div>
 
@@ -144,9 +141,10 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
                 <button
                   onClick={() => {
                     onClose();
-                    onLaunchPlayer(device?.id || 'dev_1');
+                    if (device) onLaunchPlayer(device.id);
                   }}
-                  className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow-sm flex items-center justify-center space-x-1.5 transition text-xs"
+                  disabled={!device}
+                  className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 text-white font-semibold rounded-lg shadow-sm flex items-center justify-center space-x-1.5 transition text-xs"
                 >
                   <Tv className="w-3.5 h-3.5" />
                   <span>Simular Player Nesta Tela</span>
@@ -193,10 +191,10 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
                   <span className="w-5 h-5 rounded-full bg-green-600 text-white font-bold flex items-center justify-center text-[10px]">
                     3
                   </span>
-                  <span className="font-semibold text-white">Valide a Telemetria</span>
+                  <span className="font-semibold text-white">Confira o player</span>
                 </div>
                 <p className="text-slate-400 text-[11px] leading-relaxed">
-                  Toque nos anúncios, responda ao Quiz ou escaneie o cupom. Veja os logs aparecerem instantaneamente no painel!
+                  Verifique se as campanhas elegíveis para esta tela estão sendo exibidas.
                 </p>
               </div>
 
@@ -207,16 +205,14 @@ export const MobileTesterModal: React.FC<MobileTesterModalProps> = ({
           <div className="p-4 bg-slate-900/40 rounded-xl border border-slate-700/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-slate-300 text-[11px]">
             <div className="flex items-center space-x-2.5">
               <ShieldCheck className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-              <div>
-                <p className="font-semibold text-white">Modo Offline-First com Cache Local</p>
-                <p className="text-slate-400 text-[10px]">
-                  Os criativos são baixados na memória do celular. Se o 4G oscilar, os vídeos não travam.
-                </p>
-              </div>
+              <p className="font-semibold text-white">Player de campanhas</p>
+              <p className="text-slate-400 text-[10px]">
+                A reprodução depende da conexão com o serviço e das campanhas ativas para a tela.
+              </p>
             </div>
 
             <span className="px-3 py-1 bg-slate-800 text-slate-200 border border-slate-700 rounded-lg font-mono text-[10px] whitespace-nowrap">
-              Protocolo: MQTT v3.1.1 TLS
+              Modo quiosque simplificado
             </span>
           </div>
 

@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { randomInt, randomUUID } from 'node:crypto';
-import { storage } from './storage';
+import { rateLimit } from 'express-rate-limit';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { getVeloRepository } from './repository';
 import { 
   verifyPassword, 
   generateSessionToken, 
@@ -41,27 +42,68 @@ import {
   validateBody
 } from './schemas';
 import { pixGateway } from './billing';
+import {
+  adminRequestRateLimiter,
+  asaasWebhookRateLimiter,
+  commandAckRateLimiter,
+  deviceRequestRateLimiter,
+  loginRequestRateLimiter,
+  publicPlayerRateLimiter,
+} from './rate-limit';
 import type { Device, Driver, Campaign, GeoFence, ProofOfPlayLog, AdvertiserAccount, SaaSInvoice } from '../src/types';
 
 export const apiRouter = Router();
+const repository = getVeloRepository();
+const routeMethods = ['get', 'post', 'put', 'patch', 'delete'] as const;
+for (const method of routeMethods) {
+  const router = apiRouter as any;
+  const register = router[method].bind(apiRouter);
+  router[method] = (...args: unknown[]) => register(...args.map(arg =>
+    typeof arg === 'function'
+      ? (req: Request, res: Response, next: (error?: unknown) => void) =>
+        Promise.resolve((arg as (req: Request, res: Response, next: (error?: unknown) => void) => unknown)(req, res, next)).catch(next)
+      : arg,
+  ));
+}
 
 // ============================================================================
 // 1. HEALTH & METRICS
 // ============================================================================
-apiRouter.get('/health', (_req: Request, res: Response) => {
+apiRouter.get('/health', async (_req: Request, res: Response) => {
+  try {
+    await repository.ping();
+  } catch {
+    res.status(503).json({ status: 'unhealthy', timestamp: new Date().toISOString() });
+    return;
+  }
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.4.0-prod',
+    version: '2.5.0-beta.3',
     environment: process.env.NODE_ENV || 'production',
   });
+});
+
+apiRouter.get('/player/:deviceCode', publicPlayerRateLimiter, async (req: Request, res: Response) => {
+  res.set('Cache-Control', 'no-store');
+  const deviceCode = req.params.deviceCode;
+  if (!deviceCode || deviceCode.length > 64) {
+    res.status(404).json({ error: 'player_not_found', message: 'Player não encontrado.' });
+    return;
+  }
+  const player = await repository.getPublicPlayerBootstrap(deviceCode);
+  if (!player) {
+    res.status(404).json({ error: 'player_not_found', message: 'Player não encontrado.' });
+    return;
+  }
+  res.json(player);
 });
 
 // ============================================================================
 // 2. AUTHENTICATION & SESSION
 // ============================================================================
-apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Response): void => {
+apiRouter.post('/auth/login', loginRequestRateLimiter, validateBody(LoginSchema), async (req: Request, res: Response): Promise<void> => {
   const ip = req.ip || 'unknown-ip';
   const { email, password } = req.body;
 
@@ -75,11 +117,11 @@ apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Res
     return;
   }
 
-  const user = storage.getUserByEmail(email);
+  const user = await repository.getUserByEmail(email);
 
-  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+  if (!user || user.status !== 'active' || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
     recordFailedLogin(ip);
-    storage.logAudit({
+    await repository.logAudit({
       organizationId: user?.organizationId || 'system',
       userEmail: email,
       action: 'AUTH_LOGIN_FAILED',
@@ -98,7 +140,7 @@ apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Res
   const token = generateSessionToken();
   const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
 
-  storage.createSession({
+  await repository.createSession({
     token,
     userId: user.id,
     userEmail: user.email,
@@ -112,7 +154,7 @@ apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Res
   // Set secure HttpOnly cookie
   res.cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTIONS);
 
-  storage.logAudit({
+  await repository.logAudit({
     organizationId: user.organizationId,
     userId: user.id,
     userEmail: user.email,
@@ -122,7 +164,7 @@ apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Res
   });
 
   const { passwordHash: _, ...safeUser } = user;
-  const org = storage.getOrganizationById(user.organizationId);
+  const org = await repository.getOrganizationById(user.organizationId);
 
   // Section 2.2: Do NOT return the token in JSON body; keep it exclusively in HttpOnly cookie
   res.json({
@@ -131,17 +173,17 @@ apiRouter.post('/auth/login', validateBody(LoginSchema), (req: Request, res: Res
   });
 });
 
-apiRouter.post('/auth/logout', (req: Request, res: Response) => {
+apiRouter.post('/auth/logout', async (req: Request, res: Response) => {
   if (req.sessionToken) {
-    storage.deleteSession(req.sessionToken);
+    await repository.deleteSession(req.sessionToken);
   }
   res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
   res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
 });
 
-apiRouter.get('/auth/me', requireAuth, (req: Request, res: Response): void => {
-  const user = storage.getUserById(req.user!.id);
-  const org = storage.getOrganizationById(req.user!.organizationId);
+apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  const user = await repository.getUserById(req.user!.id);
+  const org = await repository.getOrganizationById(req.user!.organizationId);
 
   res.json({
     authenticated: true,
@@ -153,17 +195,17 @@ apiRouter.get('/auth/me', requireAuth, (req: Request, res: Response): void => {
 // ============================================================================
 // 3. ORGANIZATIONS (Super Admin / Multi-Tenant Master)
 // ============================================================================
-apiRouter.get('/organizations', requireAuth, (req: Request, res: Response) => {
+apiRouter.get('/organizations', requireAuth, async (req: Request, res: Response) => {
   if (req.user!.role === 'platform_admin' || req.user!.role === 'super_admin') {
-    return res.json(storage.getOrganizations());
+    return res.json(await repository.getOrganizations());
   }
-  const userOrg = storage.getOrganizationById(req.user!.organizationId);
+  const userOrg = await repository.getOrganizationById(req.user!.organizationId);
   res.json(userOrg ? [userOrg] : []);
 });
 
-apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), (req: Request, res: Response) => {
-  storage.saveOrganization(req.body);
-  storage.logAudit({
+apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), async (req: Request, res: Response) => {
+  await repository.saveOrganization(req.body);
+  await repository.logAudit({
     organizationId: req.body.id,
     userId: req.user!.id,
     userEmail: req.user!.email,
@@ -175,16 +217,16 @@ apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'su
   res.status(201).json(req.body);
 });
 
-apiRouter.put('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), (req: Request, res: Response) => {
+apiRouter.put('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), async (req: Request, res: Response) => {
   if (req.params.id !== req.body.id) {
     return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID da organização.' });
   }
-  storage.saveOrganization(req.body);
+  await repository.saveOrganization(req.body);
   res.json(req.body);
 });
 
-apiRouter.delete('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
-  const deleted = storage.deleteOrganization(req.params.id);
+apiRouter.delete('/organizations/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
+  const deleted = await repository.deleteOrganization(req.params.id);
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Organização não encontrada.' });
   }
@@ -194,34 +236,34 @@ apiRouter.delete('/organizations/:id', requireAuth, requireRole(['platform_admin
 // ============================================================================
 // 4. DRIVERS (Strict Multi-Tenant Isolation)
 // ============================================================================
-apiRouter.get('/drivers', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  res.json(storage.getDrivers(tenantId));
+apiRouter.get('/drivers', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  res.json(await repository.getDrivers(tenantId));
 });
 
-apiRouter.post('/drivers', requireAuth, validateBody(DriverSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const saved = storage.saveDriver(req.body as Driver, tenantId);
+apiRouter.post('/drivers', requireAuth, validateBody(DriverSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const saved = await repository.saveDriver(req.body as Driver, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Motorista já existe em outro tenant.' });
   }
   res.status(201).json(saved);
 });
 
-apiRouter.put('/drivers/:id', requireAuth, validateBody(DriverSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const existing = storage.getDriverById(req.params.id, tenantId);
+apiRouter.put('/drivers/:id', requireAuth, validateBody(DriverSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const existing = await repository.getDriverById(req.params.id, tenantId);
   if (!existing) {
     return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado neste tenant.' });
   }
 
-  const updated = storage.saveDriver(req.body as Driver, tenantId);
+  const updated = await repository.saveDriver(req.body as Driver, tenantId);
   res.json(updated);
 });
 
-apiRouter.delete('/drivers/:id', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const deleted = storage.deleteDriver(req.params.id, tenantId);
+apiRouter.delete('/drivers/:id', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const deleted = await repository.deleteDriver(req.params.id, tenantId);
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado neste tenant.' });
   }
@@ -238,34 +280,34 @@ apiRouter.post('/drivers/:id/payout', requireAuth, requireRole(['platform_admin'
 // ============================================================================
 // 5. DEVICES (Strict Multi-Tenant Isolation & Cryptographic Pairing)
 // ============================================================================
-apiRouter.get('/devices', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  res.json(storage.getDevices(tenantId));
+apiRouter.get('/devices', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  res.json(await repository.getDevices(tenantId));
 });
 
-apiRouter.post('/devices', requireAuth, validateBody(DeviceSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const saved = storage.saveDevice(req.body as Device, tenantId);
+apiRouter.post('/devices', requireAuth, validateBody(DeviceSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const saved = await repository.saveDevice(req.body as Device, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Dispositivo já registrado em outro tenant.' });
   }
   res.status(201).json(saved);
 });
 
-apiRouter.put('/devices/:id', requireAuth, validateBody(DeviceSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const existing = storage.getDeviceById(req.params.id, tenantId);
+apiRouter.put('/devices/:id', requireAuth, validateBody(DeviceSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const existing = await repository.getDeviceById(req.params.id, tenantId);
   if (!existing) {
     return res.status(404).json({ error: 'not_found', message: 'Dispositivo não encontrado neste tenant.' });
   }
 
-  const updated = storage.saveDevice(req.body as Device, tenantId);
+  const updated = await repository.saveDevice(req.body as Device, tenantId);
   res.json(updated);
 });
 
-apiRouter.delete('/devices/:id', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const deleted = storage.deleteDevice(req.params.id, tenantId);
+apiRouter.delete('/devices/:id', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const deleted = await repository.deleteDevice(req.params.id, tenantId);
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Dispositivo não encontrado neste tenant.' });
   }
@@ -275,16 +317,16 @@ apiRouter.delete('/devices/:id', requireAuth, (req: Request, res: Response) => {
 /**
  * Generate 6-digit pairing code for in-car tablet
  */
-apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), validateBody(PairingTokenRequestSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
+apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), validateBody(PairingTokenRequestSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
   const driverId = req.body.driverId || '';
-  if (driverId && !storage.getDriverById(driverId, tenantId)) {
+  if (driverId && !await repository.getDriverById(driverId, tenantId)) {
     return res.status(404).json({ error: 'driver_not_found', message: 'Motorista não encontrado neste tenant.' });
   }
   const code = generatePairingCode();
   const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
-  storage.createPairingToken({
+  await repository.createPairingToken({
     token: code,
     organizationId: tenantId,
     driverId,
@@ -306,7 +348,7 @@ apiRouter.post('/devices/pairing-token', requireAuth, requireRole(['platform_adm
  * Cryptographic tablet pairing endpoint.
  * Generates unique deviceSecret and saves device credentials.
  */
-apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: Request, res: Response): void => {
+apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async (req: Request, res: Response): Promise<void> => {
   const { pairingCode, model, serialNumber, screenPosition, hardwareOwnership } = req.body;
   const ip = req.ip || 'unknown-ip';
   const rateLimit = checkPairingRateLimit(ip);
@@ -318,18 +360,15 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
     return;
   }
 
-  const tokenRecord = storage.getPairingToken(pairingCode);
+  const tokenRecord = await repository.getPairingToken(pairingCode);
   if (!tokenRecord) {
     recordFailedPairing(ip);
     res.status(400).json({ error: 'invalid_code', message: 'Código de pareamento inválido ou expirado.' });
     return;
   }
 
-  resetPairingRateLimit(ip);
-  storage.markPairingTokenUsed(pairingCode);
-
   const orgId = tokenRecord.organizationId;
-  const driver = tokenRecord.driverId ? storage.getDriverById(tokenRecord.driverId, orgId) : undefined;
+  const driver = tokenRecord.driverId ? await repository.getDriverById(tokenRecord.driverId, orgId) : undefined;
   const deviceId = `dev_${randomUUID()}`;
   const deviceCode = `TV-${orgId.substring(0, 4).toUpperCase()}-${randomInt(1000, 10000)}`;
   const deviceSecret = generateDeviceSecret();
@@ -367,7 +406,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.4.0-prod',
+      appVersion: '2.5.0-beta.3',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
@@ -399,19 +438,14 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
     organizationId: orgId,
   };
 
-  storage.saveDevice(newDevice, orgId);
-
-  // Store cryptographic credentials for this tablet
-  storage.saveDeviceCredential({
+  const paired = await repository.consumeAndProvisionDevice(pairingCode, newDevice, {
     deviceId,
     organizationId: orgId,
     deviceSecret,
     revoked: false,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
-  });
-
-  storage.logAudit({
+  }, {
     organizationId: orgId,
     action: 'DEVICE_PAIRED',
     resource: 'devices',
@@ -419,6 +453,12 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
     details: { model, serialNumber, driverId: driver?.id },
     ipAddress: req.ip,
   });
+  if (!paired) {
+    recordFailedPairing(ip);
+    res.status(400).json({ error: 'invalid_code', message: 'Código de pareamento inválido, expirado ou já utilizado.' });
+    return;
+  }
+  resetPairingRateLimit(ip);
 
   // Return device and one-time provisioned deviceSecret
   res.status(201).json({
@@ -432,34 +472,34 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), (req: 
 // ============================================================================
 // 6. CAMPAIGNS (Strict Multi-Tenant Isolation)
 // ============================================================================
-apiRouter.get('/campaigns', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  res.json(storage.getCampaigns(tenantId));
+apiRouter.get('/campaigns', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  res.json(await repository.getCampaigns(tenantId));
 });
 
-apiRouter.post('/campaigns', requireAuth, validateBody(CampaignSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const saved = storage.saveCampaign(req.body as Campaign, tenantId);
+apiRouter.post('/campaigns', requireAuth, validateBody(CampaignSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const saved = await repository.saveCampaign(req.body as Campaign, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Campanha já existe em outro tenant.' });
   }
   res.status(201).json(saved);
 });
 
-apiRouter.put('/campaigns/:id', requireAuth, validateBody(CampaignSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const existing = storage.getCampaignById(req.params.id, tenantId);
+apiRouter.put('/campaigns/:id', requireAuth, validateBody(CampaignSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const existing = await repository.getCampaignById(req.params.id, tenantId);
   if (!existing) {
     return res.status(404).json({ error: 'not_found', message: 'Campanha não encontrada neste tenant.' });
   }
 
-  const updated = storage.saveCampaign(req.body as Campaign, tenantId);
+  const updated = await repository.saveCampaign(req.body as Campaign, tenantId);
   res.json(updated);
 });
 
-apiRouter.delete('/campaigns/:id', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const deleted = storage.deleteCampaign(req.params.id, tenantId);
+apiRouter.delete('/campaigns/:id', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const deleted = await repository.deleteCampaign(req.params.id, tenantId);
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Campanha não encontrada neste tenant.' });
   }
@@ -469,33 +509,33 @@ apiRouter.delete('/campaigns/:id', requireAuth, (req: Request, res: Response) =>
 // ============================================================================
 // 7. GEOFENCES (Strict Multi-Tenant Isolation)
 // ============================================================================
-apiRouter.get('/geofences', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  res.json(storage.getGeoFences(tenantId));
+apiRouter.get('/geofences', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  res.json(await repository.getGeoFences(tenantId));
 });
 
-apiRouter.post('/geofences', requireAuth, validateBody(GeoFenceSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const saved = storage.saveGeoFence(req.body as GeoFence, tenantId);
+apiRouter.post('/geofences', requireAuth, validateBody(GeoFenceSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const saved = await repository.saveGeoFence(req.body as GeoFence, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'GeoFence já existe em outro tenant.' });
   }
   res.status(201).json(saved);
 });
 
-apiRouter.put('/geofences/:id', requireAuth, validateBody(GeoFenceSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const existing = storage.getGeoFenceById(req.params.id, tenantId);
+apiRouter.put('/geofences/:id', requireAuth, validateBody(GeoFenceSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const existing = await repository.getGeoFenceById(req.params.id, tenantId);
   if (!existing) {
     return res.status(404).json({ error: 'not_found', message: 'GeoFence não encontrada neste tenant.' });
   }
-  const updated = storage.saveGeoFence(req.body as GeoFence, tenantId);
+  const updated = await repository.saveGeoFence(req.body as GeoFence, tenantId);
   res.json(updated);
 });
 
-apiRouter.delete('/geofences/:id', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const deleted = storage.deleteGeoFence(req.params.id, tenantId);
+apiRouter.delete('/geofences/:id', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const deleted = await repository.deleteGeoFence(req.params.id, tenantId);
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'GeoFence não encontrada neste tenant.' });
   }
@@ -505,10 +545,10 @@ apiRouter.delete('/geofences/:id', requireAuth, (req: Request, res: Response) =>
 // ============================================================================
 // 8. PROOF OF PLAY (Tamper-Proof, Anti-Replay & HMAC Cryptographic Validation)
 // ============================================================================
-apiRouter.get('/proof-of-play', requireAuth, (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
+apiRouter.get('/proof-of-play', requireAuth, async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
   const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 500);
-  res.json(storage.getProofOfPlayLogs(tenantId, limit));
+  res.json(await repository.getProofOfPlayLogs(tenantId, limit));
 });
 
 /**
@@ -520,8 +560,9 @@ apiRouter.get('/proof-of-play', requireAuth, (req: Request, res: Response) => {
 apiRouter.post(
   '/proof-of-play',
   requireDeviceAuth,
+  deviceRequestRateLimiter,
   validateBody(ProofOfPlaySubmissionSchema),
-  (req: Request, res: Response): void => {
+  async (req: Request, res: Response): Promise<void> => {
     const item = req.body;
     const authDevice = req.device!;
     const cred = req.deviceCredential!;
@@ -546,7 +587,7 @@ apiRouter.post(
 
     // 3. Validate campaign exists and belongs to the device's tenant
     const tenantId = authDevice.organizationId;
-    const campaign = storage.getCampaignById(item.campaignId, tenantId);
+    const campaign = await repository.getCampaignById(item.campaignId, tenantId);
     if (!campaign) {
       res.status(404).json({
         error: 'campaign_not_found',
@@ -567,7 +608,7 @@ apiRouter.post(
     const isSignatureValid = verifyProofOfPlaySignature(
       {
         eventId: item.eventId,
-        deviceId: item.deviceId,
+        deviceId: authDevice.id,
         campaignId: item.campaignId,
         creativeId: item.creativeId,
         startedAt: item.startedAt,
@@ -613,15 +654,6 @@ apiRouter.post(
     }
 
     // 6. Check and record anti-replay (ATOMICALLY AFTER VALID SIGNATURE)
-    const replayResult = storage.checkAndRecordReplay(item.eventId, item.nonce, endedAtTimestamp);
-    if (!replayResult.valid) {
-      res.status(400).json({
-        error: 'replay_detected',
-        message: replayResult.reason || 'Replay de Proof of Play detectado.',
-      });
-      return;
-    }
-
     // 7. Record verified log
     const durationSec = Math.round(item.durationMs / 1000);
     const log: ProofOfPlayLog = {
@@ -644,7 +676,11 @@ apiRouter.post(
       organizationId: tenantId,
     };
 
-    const recorded = storage.recordProofOfPlay(log, tenantId);
+    const recorded = await repository.recordProofOfPlayAndReplay(log, tenantId);
+    if (!recorded) {
+      res.status(400).json({ error: 'replay_detected', message: 'Event ID or nonce already processed.' });
+      return;
+    }
     res.json({ success: true, recorded, eventId: item.eventId });
   }
 );
@@ -652,12 +688,12 @@ apiRouter.post(
 // ============================================================================
 // 9. TELEMETRY & HARDWARE HEARTBEAT (Authenticated)
 // ============================================================================
-apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, validateBody(TelemetryHeartbeatSchema), (req: Request, res: Response) => {
+apiRouter.post('/telemetry/heartbeat', rateLimit({ windowMs: 60_000, limit: 1_800 }), requireDeviceAuth, deviceRequestRateLimiter, validateBody(TelemetryHeartbeatSchema), async (req: Request, res: Response) => {
   const device = req.device!;
   const tenantId = req.resolvedTenantId!;
   const body = req.body;
 
-  const existing = storage.getDeviceById(device.id, tenantId);
+  const existing = await repository.getDeviceById(device.id, tenantId);
   if (existing) {
     existing.currentLocation = {
       ...existing.currentLocation,
@@ -675,11 +711,11 @@ apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, validateBody(Telemetry
       appVersion: body.appVersion,
       lastHeartbeat: new Date().toISOString(),
     };
-    storage.saveDevice(existing, tenantId);
+    await repository.saveDevice(existing, tenantId);
   }
 
   // Get pending commands for this tablet
-  const pendingCommands = storage.getPendingCommands(device.id, tenantId);
+  const pendingCommands = await repository.getPendingCommands(device.id, tenantId);
 
   res.json({
     status: 'ok',
@@ -691,15 +727,15 @@ apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, validateBody(Telemetry
 // ============================================================================
 // 10. REMOTE COMMANDS (MDM)
 // ============================================================================
-apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), validateBody(RemoteCommandSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const device = storage.getDeviceById(req.body.deviceId, tenantId);
+apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', 'operator', 'super_admin']), adminRequestRateLimiter, validateBody(RemoteCommandSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const device = await repository.getDeviceById(req.body.deviceId, tenantId);
   if (!device) {
     return res.status(404).json({ error: 'not_found', message: 'Dispositivo não encontrado no seu tenant.' });
   }
 
   const cmdId = `cmd_${Date.now().toString(36)}`;
-  storage.createRemoteCommand({
+  await repository.createRemoteCommand({
     id: cmdId,
     organizationId: tenantId,
     deviceId: device.id,
@@ -708,7 +744,7 @@ apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', '
     createdAt: new Date().toISOString(),
   });
 
-  storage.logAudit({
+  await repository.logAudit({
     organizationId: tenantId,
     userId: req.user!.id,
     userEmail: req.user!.email,
@@ -722,9 +758,9 @@ apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', '
   res.status(201).json({ success: true, commandId: cmdId });
 });
 
-apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, (req: Request, res: Response) => {
-  const tenantId = req.resolvedTenantId || resolveTenant(req);
-  const acknowledged = storage.acknowledgeCommand(req.params.id, tenantId);
+apiRouter.post('/remote-commands/:id/acknowledge', rateLimit({ windowMs: 60_000, limit: 1_800 }), requireUserOrDeviceAuth, commandAckRateLimiter, async (req: Request, res: Response) => {
+  const tenantId = req.resolvedTenantId || await resolveTenant(req);
+  const acknowledged = await repository.acknowledgeCommand(req.params.id, tenantId);
   if (!acknowledged) {
     return res.status(404).json({ error: 'not_found', message: 'Comando não encontrado.' });
   }
@@ -734,37 +770,49 @@ apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, (req
 // ============================================================================
 // 11. ADVERTISERS & INVOICES (Strict Multi-Tenant Isolation)
 // ============================================================================
-apiRouter.get('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  res.json(storage.getAdvertisers(tenantId));
+apiRouter.get('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  res.json(await repository.getAdvertisers(tenantId));
 });
 
-apiRouter.post('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), validateBody(AdvertiserSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const saved = storage.saveAdvertiser(req.body as AdvertiserAccount, tenantId);
+apiRouter.post('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), validateBody(AdvertiserSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const saved = await repository.saveAdvertiser(req.body as AdvertiserAccount, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Anunciante já existe em outro tenant.' });
   }
   res.status(201).json(saved);
 });
 
-apiRouter.delete('/advertisers/:id', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const deleted = storage.deleteAdvertiser(req.params.id, tenantId);
+apiRouter.delete('/advertisers/:id', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const deleted = await repository.deleteAdvertiser(req.params.id, tenantId);
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Anunciante não encontrado neste tenant.' });
   }
   res.json({ success: true });
 });
 
-apiRouter.get('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'financial_auditor']), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  res.json(storage.getInvoices(tenantId));
+apiRouter.get('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'financial_auditor']), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  res.json(await repository.getInvoices(tenantId));
 });
 
-apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), validateBody(InvoiceSchema), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const saved = storage.saveInvoice(req.body as SaaSInvoice, tenantId);
+apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), validateBody(InvoiceSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const invoice = req.body as SaaSInvoice;
+  if (invoice.status !== 'pending') {
+    return res.status(400).json({ error: 'invalid_invoice_status', message: 'Uma fatura nova deve iniciar como pendente.' });
+  }
+  if (await repository.getInvoiceById(invoice.id, tenantId)) {
+    return res.status(409).json({ error: 'invoice_exists', message: 'Já existe uma fatura com este identificador.' });
+  }
+  invoice.txid = undefined;
+  invoice.pixQrCode = undefined;
+  invoice.pixQrCodeUrl = undefined;
+  invoice.pixQrCodeExpiresAt = undefined;
+  invoice.paidAt = undefined;
+  const saved = await repository.saveInvoice(invoice, tenantId);
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Fatura já existe em outro tenant.' });
   }
@@ -775,18 +823,30 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
  * PIX charge generation with provider check.
  * Section 11: If gateway is unconfigured, explicitly returns payment_provider_not_configured.
  */
-apiRouter.post('/invoices/:id/charge-pix', requireAuth, async (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
-  const invoice = storage.getInvoiceById(req.params.id, tenantId);
+apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const invoice = await repository.getInvoiceById(req.params.id, tenantId);
   if (!invoice) {
     return res.status(404).json({ error: 'not_found', message: 'Fatura não encontrada.' });
+  }
+  if (invoice.status === 'paid') {
+    return res.status(409).json({ error: 'invoice_already_paid', message: 'Esta fatura já foi paga.' });
+  }
+  const organization = await repository.getOrganizationById(tenantId);
+  if (!organization) {
+    return res.status(404).json({ error: 'organization_not_found', message: 'Organização da fatura não encontrada.' });
   }
 
   const result = await pixGateway.createPixCharge({
     invoiceId: invoice.id,
+    organizationId: tenantId,
     amount: invoice.amount,
-    organizationName: invoice.organizationName,
+    organizationName: organization.name,
     description: `Fatura VeloMedia DOOH #${invoice.invoiceNumber}`,
+    dueDate: invoice.dueDate,
+    cnpj: organization.cnpj,
+    email: organization.billingEmail,
+    phone: organization.adminUser.phone,
   });
 
   if (result.status === 'payment_provider_not_configured') {
@@ -795,37 +855,99 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, async (req: Request, res
       message: result.error || 'Provedor de pagamentos PIX não está configurado neste ambiente.',
     });
   }
+  if (result.status === 'failed') {
+    return res.status(502).json({ error: 'payment_creation_failed', message: result.error });
+  }
 
   invoice.txid = result.txid;
   invoice.pixQrCode = result.copiaECola;
-  storage.saveInvoice(invoice, tenantId);
+  invoice.pixQrCodeUrl = result.qrCodeUrl;
+  invoice.pixQrCodeExpiresAt = result.expiresAt;
+  const saved = await repository.saveInvoice(invoice, tenantId);
+  if (!saved) {
+    return res.status(500).json({ error: 'payment_record_failed', message: 'A cobrança foi criada, mas não foi possível salvar os dados da fatura.' });
+  }
 
   res.json({
     success: true,
     txid: result.txid,
     copiaECola: result.copiaECola,
-    qrCodeSvg: result.qrCodeSvg,
+    qrCodeUrl: result.qrCodeUrl,
     expiresAt: result.expiresAt,
   });
 });
 
 /**
- * Webhook callback with signature verification & deduplication
+ * Asaas webhook authenticated with the dedicated notification token.
  */
-apiRouter.post('/webhooks/pix', (_req: Request, res: Response) => {
-  res.status(503).json({
-    error: 'payment_provider_not_configured',
-    message: 'Webhooks de pagamento estão desativados até que um provedor transacional seja integrado.',
-  });
+apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, res: Response) => {
+  if (!pixGateway.verifyAsaasWebhookToken(req.get('asaas-access-token'))) {
+    return res.status(401).json({ error: 'invalid_webhook_token' });
+  }
+  const event = req.body;
+  if (!event || typeof event.id !== 'string' || event.id.length > 128 || typeof event.event !== 'string') {
+    return res.status(400).json({ error: 'invalid_webhook_payload' });
+  }
+
+  try {
+    const payment = event.payment;
+    const paidEvents = new Set(['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED']);
+    const overdueEvents = new Set(['PAYMENT_OVERDUE']);
+    if (
+      payment &&
+      typeof payment.id === 'string' &&
+      typeof payment.externalReference === 'string' &&
+      payment.externalReference.startsWith('invoice:') &&
+      (paidEvents.has(event.event) || overdueEvents.has(event.event))
+    ) {
+      const invoiceId = payment.externalReference.slice('invoice:'.length);
+      const organizations = await repository.getOrganizations();
+      const matchingInvoices: Array<{ invoice: SaaSInvoice; organizationId: string }> = [];
+      for (const organization of organizations) {
+        const invoice = await repository.getInvoiceById(invoiceId, organization.id);
+        if (invoice && invoice.txid === payment.id && Number(payment.value) === invoice.amount) {
+          matchingInvoices.push({ invoice, organizationId: organization.id });
+        }
+      }
+      if (matchingInvoices.length > 1) {
+        return res.status(409).json({ error: 'ambiguous_invoice_reference' });
+      }
+      const match = matchingInvoices[0];
+      if (match) {
+        if (paidEvents.has(event.event) && match.invoice.status !== 'paid') {
+          match.invoice.status = 'paid';
+          match.invoice.paidAt = payment.paymentDate || payment.clientPaymentDate || new Date().toISOString();
+          if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
+            return res.status(500).json({ error: 'invoice_update_failed' });
+          }
+        } else if (overdueEvents.has(event.event) && match.invoice.status === 'pending') {
+          match.invoice.status = 'overdue';
+          if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
+            return res.status(500).json({ error: 'invoice_update_failed' });
+          }
+        }
+      }
+    }
+
+    const isNew = await repository.recordWebhook({
+      eventId: event.id,
+      provider: 'asaas',
+      processedAt: new Date().toISOString(),
+      payloadHash: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+    });
+    return res.json({ received: true, duplicate: !isNew });
+  } catch {
+    return res.status(500).json({ error: 'webhook_processing_failed' });
+  }
 });
 
 // ============================================================================
 // 12. AUDIT LOGS
 // ============================================================================
-apiRouter.get('/audit-logs', requireAuth, requireRole(['platform_admin', 'super_admin']), (req: Request, res: Response) => {
-  const tenantId = resolveTenant(req);
+apiRouter.get('/audit-logs', requireAuth, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
   const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 1000);
-  res.json(storage.getAuditLogs(tenantId, limit));
+  res.json(await repository.getAuditLogs(tenantId, limit));
 });
 
 // ============================================================================

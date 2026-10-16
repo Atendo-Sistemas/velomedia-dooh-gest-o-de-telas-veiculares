@@ -1,11 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
-import { storage } from './storage';
-import type { SessionRecord, DeviceCredentialRecord } from './storage';
+import { getVeloRepository } from './repository';
+import type { DeviceCredentialRecord } from './storage';
 import type { SaaSUserRole, DeviceStatus } from '../src/types';
 import { 
   verifyDeviceRequestSignature, 
   hashRequestBody 
 } from './crypto';
+
+const repository = getVeloRepository();
 
 export interface AuthenticatedUser {
   id: string;
@@ -146,7 +148,7 @@ export function resetPairingRateLimit(key: string): void {
 /**
  * Authentication middleware for web users and APIs
  */
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Extract session token from HttpOnly Cookie or Bearer header (dev support)
   let token: string | undefined = req.cookies?.[SESSION_COOKIE_NAME];
 
@@ -158,9 +160,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   if (token) {
-    const session = storage.getSession(token);
+    const session = await repository.getSession(token);
     if (session) {
-      const user = storage.getUserById(session.userId);
+      const user = await repository.getUserById(session.userId);
       if (user?.status === 'active') {
         req.user = {
           id: user.id,
@@ -171,7 +173,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
         };
         req.sessionToken = token;
       } else {
-        storage.deleteSession(token);
+        await repository.deleteSession(token);
       }
     }
   }
@@ -219,7 +221,7 @@ export function requireRole(allowedRoles: SaaSUserRole[]) {
  * Cryptographic device authentication for in-car tablets.
  * Requires HMAC-SHA256 signature over method, path, timestamp, nonce, and bodyHash.
  */
-export function requireDeviceAuth(req: Request, res: Response, next: NextFunction): void {
+export async function requireDeviceAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const deviceId = req.headers['x-device-id'] as string | undefined;
   const timestamp = req.headers['x-device-timestamp'] as string | undefined;
   const nonce = req.headers['x-device-nonce'] as string | undefined;
@@ -230,6 +232,10 @@ export function requireDeviceAuth(req: Request, res: Response, next: NextFunctio
       error: 'device_authentication_required',
       message: 'Cabeçalhos de autenticação de dispositivo ausentes (x-device-id, x-device-timestamp, x-device-nonce, x-device-signature).',
     });
+    return;
+  }
+  if (deviceId.length > 64 || nonce.length > 64 || signature.length > 128) {
+    res.status(400).json({ error: 'invalid_device_auth_headers', message: 'Cabeçalhos de autenticação de dispositivo inválidos.' });
     return;
   }
 
@@ -249,18 +255,8 @@ export function requireDeviceAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  // 2. Anti-replay check for nonce
-  const replayCheck = storage.checkAndRecordReplay(`req_${deviceId}_${timestamp}`, nonce, timestampMs);
-  if (!replayCheck.valid) {
-    res.status(401).json({
-      error: 'device_replay_detected',
-      message: replayCheck.reason || 'Replay de requisição detectado.',
-    });
-    return;
-  }
-
-  // 3. Find device credential
-  const cred = storage.getDeviceCredential(deviceId);
+  // 2. Find credential and validate the request before consuming its nonce.
+  const cred = await repository.getDeviceCredential(deviceId);
   if (!cred || cred.revoked) {
     res.status(401).json({
       error: 'device_credentials_not_found',
@@ -269,7 +265,7 @@ export function requireDeviceAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  // 4. Verify HMAC signature
+  // 3. Verify HMAC signature
   const bodyHash = hashRequestBody(req.body);
   const isValidSig = verifyDeviceRequestSignature(
     {
@@ -291,9 +287,19 @@ export function requireDeviceAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
+  // 4. Atomically record nonce only after signature verification.
+  const replayCheck = await repository.checkAndRecordReplay(`req_${deviceId}_${timestamp}`, nonce, timestampMs);
+  if (!replayCheck.valid) {
+    res.status(401).json({
+      error: 'device_replay_detected',
+      message: replayCheck.reason || 'Replay de requisição detectado.',
+    });
+    return;
+  }
+
   // 5. Look up device entity
-  const device = storage.getDeviceByIdInternal(deviceId);
-  if (!device || device.status === 'retired') {
+  const device = await repository.getDeviceByIdInternal(deviceId);
+  if (!device || device.status === 'retired' || device.organizationId !== cred.organizationId) {
     res.status(403).json({
       error: 'device_disabled',
       message: 'Dispositivo desativado ou não registrado.',
@@ -317,7 +323,7 @@ export function requireDeviceAuth(req: Request, res: Response, next: NextFunctio
 /**
  * Guard that allows either a valid user session OR valid cryptographic device authentication.
  */
-export function requireUserOrDeviceAuth(req: Request, res: Response, next: NextFunction): void {
+export async function requireUserOrDeviceAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.user) {
     req.resolvedTenantId = req.user.organizationId;
     return next();
@@ -325,7 +331,7 @@ export function requireUserOrDeviceAuth(req: Request, res: Response, next: NextF
 
   // Check if device auth headers exist
   if (req.headers['x-device-id'] && req.headers['x-device-signature']) {
-    return requireDeviceAuth(req, res, next);
+    return await requireDeviceAuth(req, res, next);
   }
 
   res.status(401).json({
@@ -338,7 +344,7 @@ export function requireUserOrDeviceAuth(req: Request, res: Response, next: NextF
  * Resolves the effective tenant with strict multi-tenant isolation.
  * Throws an error if called without an authenticated principal.
  */
-export function resolveTenant(req: Request): string {
+export async function resolveTenant(req: Request): Promise<string> {
   // 1. Device identity
   if (req.deviceCredential) {
     return req.deviceCredential.organizationId;
@@ -350,10 +356,10 @@ export function resolveTenant(req: Request): string {
     if (req.user.role === 'platform_admin' || req.user.role === 'super_admin') {
       const requestedOrg = (req.query.orgId as string) || (req.headers['x-organization-id'] as string);
       if (requestedOrg && requestedOrg.trim().length > 0) {
-        const org = storage.getOrganizationById(requestedOrg);
+        const org = await repository.getOrganizationById(requestedOrg);
         if (org && org.status === 'active') {
           // Log context switch audit
-          storage.logAudit({
+          await repository.logAudit({
             organizationId: requestedOrg,
             userId: req.user.id,
             userEmail: req.user.email,

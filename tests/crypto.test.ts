@@ -77,27 +77,38 @@ describe('VeloMedia DOOH Cryptographic Engine', () => {
     expect(payload).toHaveLength(payload.lastIndexOf('6304') + 8);
   });
 
-  it('should not report PIX charges as created without a real provider integration', async () => {
+  it('does not enable PIX when only legacy generic gateway credentials are set', async () => {
     const previousEnv = {
       NODE_ENV: process.env.NODE_ENV,
+      PIX_GATEWAY_PROVIDER: process.env.PIX_GATEWAY_PROVIDER,
       PIX_CLIENT_ID: process.env.PIX_CLIENT_ID,
       PIX_CLIENT_SECRET: process.env.PIX_CLIENT_SECRET,
       PIX_KEY: process.env.PIX_KEY,
       WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+      ASAAS_API_KEY: process.env.ASAAS_API_KEY,
+      ASAAS_WEBHOOK_TOKEN: process.env.ASAAS_WEBHOOK_TOKEN,
     };
 
     try {
       process.env.NODE_ENV = 'production';
+      process.env.PIX_GATEWAY_PROVIDER = 'efi_bank';
       process.env.PIX_CLIENT_ID = 'configured-client';
       process.env.PIX_CLIENT_SECRET = 'configured-secret';
       process.env.PIX_KEY = 'pix@example.com';
       process.env.WEBHOOK_SECRET = 'configured-webhook-secret';
+      delete process.env.ASAAS_API_KEY;
+      delete process.env.ASAAS_WEBHOOK_TOKEN;
 
       const result = await new VeloPixGatewayAdapter().createPixCharge({
         invoiceId: 'invoice-test',
+        organizationId: 'org-test',
         amount: 10,
         organizationName: 'Test',
         description: 'Test charge',
+        dueDate: '2026-10-30',
+        cnpj: '12345678000195',
+        email: 'billing@example.com',
+        phone: '',
       });
 
       expect(result.status).toBe('payment_provider_not_configured');
@@ -149,9 +160,52 @@ describe('VeloMedia Multi-Tenant Storage Isolation', () => {
       const store = new VeloStorage();
       expect(store.getUsers()).toHaveLength(1);
       expect(store.getUsers()[0].email).toBe('owner@example.com');
+      expect(store.getUsers()[0].role).toBe('super_admin');
       expect(store.getOrganizations()).toHaveLength(1);
       expect(store.getDevices(store.getOrganizations()[0].id)).toEqual([]);
       expect(fs.statSync(testDbPath).mode & 0o777).toBe(0o600);
+
+      process.env.INITIAL_ADMIN_PASSWORD = 'a-different-test-password';
+      const restartedStore = new VeloStorage();
+      const existingAdmin = restartedStore.getUserByEmail('owner@example.com');
+      expect(verifyPassword('a-long-test-password', existingAdmin!.passwordHash!)).toBe(true);
+      expect(verifyPassword('a-different-test-password', existingAdmin!.passwordHash!)).toBe(false);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+    }
+  });
+
+  it('should create the configured super admin when existing production storage has none', () => {
+    const previousEnv = {
+      NODE_ENV: process.env.NODE_ENV,
+      DATA_FILE_PATH: process.env.DATA_FILE_PATH,
+      INITIAL_ADMIN_EMAIL: process.env.INITIAL_ADMIN_EMAIL,
+      INITIAL_ADMIN_PASSWORD: process.env.INITIAL_ADMIN_PASSWORD,
+    };
+    const password = 'a-long-test-password';
+
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATA_FILE_PATH = testDbPath;
+      process.env.INITIAL_ADMIN_EMAIL = 'owner@example.com';
+      process.env.INITIAL_ADMIN_PASSWORD = password;
+      if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+
+      new VeloStorage();
+      const existingData = JSON.parse(fs.readFileSync(testDbPath, 'utf-8'));
+      existingData.users = [];
+      fs.writeFileSync(testDbPath, JSON.stringify(existingData), { mode: 0o600 });
+
+      const store = new VeloStorage();
+      const admin = store.getUserByEmail('owner@example.com');
+      expect(admin?.role).toBe('super_admin');
+      expect(admin?.passwordHash).toBeTruthy();
+      expect(verifyPassword(password, admin!.passwordHash!)).toBe(true);
+      expect(store.getOrganizations()).toHaveLength(1);
     } finally {
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];

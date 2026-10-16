@@ -1,6 +1,6 @@
 # VeloMedia DOOH
 
-Painel web e API para gestão de telas veiculares. O backend e o frontend são compilados para `dist/` e servidos pelo mesmo processo Node.js.
+Painel web e API para gestão de telas veiculares. O frontend e o servidor são compilados para `dist/` e servidos pelo mesmo processo Node.js.
 
 ## Desenvolvimento
 
@@ -11,69 +11,87 @@ npm ci
 npm run dev
 ```
 
-Em desenvolvimento, o sistema cria dados demonstrativos em `data/velomedia_store.json`. Não use esses dados nem a senha demonstrativa em produção.
+Sem `DATABASE_URL`, desenvolvimento usa o armazenamento JSON em `data/velomedia_store.json` com dados demonstrativos. Configure `DATABASE_URL` em desenvolvimento para exercitar PostgreSQL. O armazenamento JSON é desabilitado no processo de produção.
 
-## VPS Linux
+## VPS Linux: produção
 
-A implantação suportada neste repositório é uma única instância Node.js com persistência JSON em disco local. O arquivo deve ficar em um volume persistente e ser incluído em backups. Esta implementação não conecta ao PostgreSQL: `server/db/schema.sql` e `server/repository.ts` ainda não são usados pela API. Não execute múltiplas instâncias nem coloque os dados em um disco efêmero ou compartilhado; o armazenamento JSON síncrono é destinado a instalações pequenas e não oferece alta disponibilidade.
+Production requires a valid PostgreSQL `DATABASE_URL`; startup fails closed if it is missing or invalid. The API and auth use the asynchronous repository, not the synchronous JSON store. The existing relational schema is installed at startup, then ordered SQL migrations are applied transactionally and recorded in `schema_migrations`.
 
-O sistema também não integra um provedor PIX transacional nem concilia pagamentos por webhook ou repasses. Cobranças, webhooks de pagamento e repasses são recusados explicitamente, inclusive se credenciais PIX forem informadas; não marque faturas como pagas nem considere um repasse concluído fora de uma integração real.
+The API preserves its existing domain object shapes as JSONB records in `repository_records`, indexed by type and tenant. Sessions, device credentials, pairing tokens, replay nonces, webhook idempotency and remote commands use dedicated PostgreSQL tables. Tenant-scoped operations query and mutate records with their organization ID. Pairing-token consumption is atomic; PoP/replay insertion and campaign/device/driver counters run in a database transaction with row locks. PostgreSQL is the production source of truth; back up the database, not an app JSON file.
 
-### Instalação
+PIX billing for organization invoices is integrated with Asaas. Driver payouts and advertiser charge flows are not integrated; the API must not mark those operations as paid.
+The public QR player loads display-safe campaign data without an admin session. Proof-of-play submissions still require a provisioned device credential and signed request; the public kiosk bootstrap does not expose or create that credential.
 
-1. Instale Node.js 22 ou superior, Caddy e crie um usuário de serviço sem login interativo chamado `velomedia`.
-2. Disponibilize o código em `/opt/velomedia`, instale as dependências e gere os arquivos de produção:
+### Docker Compose
+
+1. Install Docker Engine with Compose and Caddy. Put the repository at `/opt/velomedia`:
 
    ```sh
    cd /opt/velomedia
-   npm install
-   npm run build
+   cp .env.example .env
+   chmod 600 .env
    ```
 
-3. Crie os diretórios de estado e configuração:
+2. Set `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (at least 16 characters), `WEBHOOK_SECRET` (`openssl rand -hex 32`), `POSTGRES_PASSWORD` and `POSTGRES_APP_PASSWORD` (`openssl rand -hex 24` for each), and `CORS_ALLOWED_ORIGINS` to the HTTPS origin. Compose initializes a database owner and a separate app role; the app role receives only the database/schema privileges required for startup migrations. Use URL-safe hex credentials for Compose's generated app URL. Set `APP_HOST_PORT` to a free local port (default `3300`); do not expose it publicly.
+
+3. Start and verify:
 
    ```sh
-   sudo install -d -o velomedia -g velomedia /var/lib/velomedia
-   sudo install -d -o root -g velomedia -m 0750 /etc/velomedia
+   docker compose up -d --build
+   docker compose ps
+   curl --fail http://127.0.0.1:3300/api/health
    ```
 
-4. Copie `.env.example` para `/etc/velomedia/velomedia.env`. Configure o domínio HTTPS, o e-mail e uma senha exclusiva de pelo menos 16 caracteres. Gere `WEBHOOK_SECRET` com `openssl rand -hex 32`. Restrinja o arquivo de configuração:
+   PostgreSQL runs privately with a readiness health check and named volume `velomedia_postgres`; the app waits for PostgreSQL to be healthy. The app's `/api/health` check also verifies a database connection. Only the app port is published on loopback. `docker compose down` retains the volume. Never use `docker compose down -v` if you need the data.
 
-   ```sh
-   sudo chown root:velomedia /etc/velomedia/velomedia.env
-   sudo chmod 0640 /etc/velomedia/velomedia.env
-   ```
+4. Configure the real domain in `deploy/Caddyfile.docker`; keep the `reverse_proxy` target on the matching loopback port. Point DNS to the VPS, configure the shared reverse proxy without replacing other sites, and allow only SSH/HTTP/HTTPS through the firewall.
 
-   `CORS_ALLOWED_ORIGINS` deve conter apenas origens HTTPS completas, separadas por vírgula, sem caminhos ou `*`. `DATA_FILE_PATH` deve apontar para o arquivo dentro de `/var/lib/velomedia`.
+5. Review `docker compose logs -f app`. Startup applies pending schema migrations and creates the configured initial admin only when needed. Existing super-admin password hashes are retained; changing `INITIAL_ADMIN_PASSWORD` does not reset an existing password.
 
-5. Instale e ative os arquivos de serviço e proxy:
+### Asaas PIX billing
 
-   ```sh
-   sudo cp deploy/velomedia.service /etc/systemd/system/
-   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
-   ```
+Select `PIX_GATEWAY_PROVIDER=asaas`, set `ASAAS_API_KEY`, and set `ASAAS_ENVIRONMENT` to `sandbox` for testing or `production` for live charges. Configure `ASAAS_WEBHOOK_TOKEN` as a unique random value of 32–255 characters (without spaces), and register `https://<your-domain>/api/v1/webhooks/asaas` in the Asaas dashboard using the same token. Subscribe to `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED`, and `PAYMENT_OVERDUE`; Asaas sends the configured token in the `asaas-access-token` header.
 
-   `app.example.com` é apenas um exemplo: substitua pelo domínio real, com DNS apontado para a VPS, tanto no Caddyfile quanto em `CORS_ALLOWED_ORIGINS`. A configuração do Caddy termina TLS automaticamente. Libere no firewall apenas SSH e HTTP/HTTPS; o serviço fixa `NODE_ENV=production` e mantém a aplicação em `127.0.0.1:3000`. A API rejeita origens não autorizadas em operações que alteram dados e envia cabeçalhos HTTP de segurança.
+The invoice PIX endpoint creates/reuses an Asaas customer from the organization CNPJ and billing contact, creates/reuses a PIX payment using the invoice as its external reference, and returns the copy-and-paste code and QR image. The webhook confirms only a payment whose provider ID, invoice reference, and amount match a locally recorded invoice. Test with Asaas sandbox credentials before enabling production. Never commit API keys or webhook tokens.
 
-6. Inicie e verifique o serviço:
+### Migrate an existing JSON VPS
 
-   ```sh
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now velomedia
-   sudo systemctl status velomedia
-   curl --fail http://127.0.0.1:3000/api/health
-   ```
+First stop the old app, take a protected backup/copy of its JSON store, create an **empty** PostgreSQL database, and configure `DATABASE_URL`, `INITIAL_ADMIN_EMAIL`, and `INITIAL_ADMIN_PASSWORD`. For a systemd/host installation run from the repository root (with development dependencies installed):
 
-   Os logs ficam disponíveis com `sudo journalctl -u velomedia -f`. O primeiro início cria uma organização vazia e o administrador definidos pelas variáveis `INITIAL_*`; essas variáveis não alteram uma instalação que já tenha dados.
+```sh
+npx tsx server/db/import-json.ts /secure/path/velomedia_store.json
+```
 
-### Atualização e backups
+For Docker Compose, build the app image first, then run the bundled importer in a one-off app container (the source mount is read-only):
 
-Faça backup de `DATA_FILE_PATH` antes de cada atualização. Pare o serviço, atualize o código, execute `npm ci` e `npm run build`, depois inicie o serviço novamente. Teste periodicamente a restauração do backup. A troca da senha inicial no arquivo de ambiente não redefine senhas existentes.
+```sh
+docker compose run --rm --user "$(id -u):$(id -g)" \
+  -v /secure/path/velomedia_store.json:/migration/source.json:ro \
+  --entrypoint node app dist/db-import.cjs /migration/source.json
+```
 
-## Comandos
+The importer rejects non-empty repository/session/security tables, imports the existing users with their password hashes (plus active sessions and device security state), and leaves the source file untouched. It runs migrations before importing and then performs the normal super-admin bootstrap without replacing an imported password hash. Verify record counts and sign-in before directing traffic to the new app. Keep the JSON backup until a PostgreSQL backup has been restored and checked.
 
-- `npm run dev` — desenvolvimento com Vite.
-- `npm run build` — compila o frontend e o servidor.
-- `npm start` — inicia o servidor compilado.
-- `npm run lint` — valida os tipos TypeScript.
-- `npm test` — executa testes automatizados.
+### systemd with a separately managed PostgreSQL server
+
+Install Node.js 22+, PostgreSQL, Caddy and a non-login `velomedia` service user. Install dependencies and build (`npm ci && npm run build`). Have a database administrator preinstall `uuid-ossp` and `pgcrypto`, then grant the app role database connect and schema usage/create privileges required for versioned startup migrations. Copy `.env.example` to `/etc/velomedia/velomedia.env`, set `DATABASE_URL` to the PostgreSQL connection string, configure the initial admin, webhook secret and HTTPS CORS origin, then restrict the file to root and the service group (`0640`). Set `PGSSL=true` where the database provider requires TLS. Install `deploy/velomedia.service` and `deploy/Caddyfile`; configure the real hostname and start with:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now velomedia
+sudo systemctl status velomedia
+```
+
+`DATABASE_URL` credentials must be URL-encoded. Permit network access to PostgreSQL only from the app host and use a least-privilege database role.
+
+### Updates and backups
+
+Take and test PostgreSQL backups regularly. Before updating, back up the database, stop the app, update code, run `npm ci` and `npm run build`, then start the app and review logs. Migrations are transactional and run at startup. Test restoring backups separately from routine upgrades.
+
+## Commands
+
+- `npm run dev` — development server with Vite.
+- `npm run build` — compiles the frontend and server.
+- `npm start` — starts the compiled server.
+- `npm run lint` — validates TypeScript.
+- `npm test` — runs automated tests.

@@ -72,6 +72,7 @@ export interface SaaSInvoice {
   pixQrCode?: string;
   pdfDownloadUrl?: string;
   txid?: string;
+  pixQrCodeExpiresAt?: string;
   paidAt?: string;
 }
 
@@ -297,6 +298,19 @@ export interface Campaign {
   totalScans: number;
   targetImpressions: number;
   priority: number; // 1-10
+}
+
+export type PublicPlayerDevice = Pick<Device, 'id' | 'code' | 'model' | 'screenPosition' | 'status'>;
+
+export type PublicPlayerCampaign = Pick<
+  Campaign,
+  'id' | 'name' | 'advertiser' | 'creative'
+> & { schedule: Pick<CampaignSchedule, 'endDate'> };
+
+export interface PublicPlayerBootstrap {
+  device: PublicPlayerDevice;
+  campaigns: PublicPlayerCampaign[];
+  geoFences: GeoFence[];
 }
 
 export interface ProofOfPlayLog {
