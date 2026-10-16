@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { randomInt, randomUUID } from 'node:crypto';
 import { getVeloRepository } from './repository';
 import { 
@@ -686,7 +687,7 @@ apiRouter.post(
 // ============================================================================
 // 9. TELEMETRY & HARDWARE HEARTBEAT (Authenticated)
 // ============================================================================
-apiRouter.post('/telemetry/heartbeat', requireDeviceAuth, deviceRequestRateLimiter, validateBody(TelemetryHeartbeatSchema), async (req: Request, res: Response) => {
+apiRouter.post('/telemetry/heartbeat', rateLimit({ windowMs: 60_000, limit: 1_800 }), requireDeviceAuth, deviceRequestRateLimiter, validateBody(TelemetryHeartbeatSchema), async (req: Request, res: Response) => {
   const device = req.device!;
   const tenantId = req.resolvedTenantId!;
   const body = req.body;
@@ -756,7 +757,7 @@ apiRouter.post('/remote-commands', requireAuth, requireRole(['platform_admin', '
   res.status(201).json({ success: true, commandId: cmdId });
 });
 
-apiRouter.post('/remote-commands/:id/acknowledge', requireUserOrDeviceAuth, commandAckRateLimiter, async (req: Request, res: Response) => {
+apiRouter.post('/remote-commands/:id/acknowledge', rateLimit({ windowMs: 60_000, limit: 1_800 }), requireUserOrDeviceAuth, commandAckRateLimiter, async (req: Request, res: Response) => {
   const tenantId = req.resolvedTenantId || await resolveTenant(req);
   const acknowledged = await repository.acknowledgeCommand(req.params.id, tenantId);
   if (!acknowledged) {
