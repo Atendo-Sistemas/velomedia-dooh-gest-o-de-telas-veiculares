@@ -822,7 +822,7 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
  * PIX charge generation with provider check.
  * Section 11: If gateway is unconfigured, explicitly returns payment_provider_not_configured.
  */
-apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'financial_auditor']), async (req: Request, res: Response) => {
+apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
   const invoice = await repository.getInvoiceById(req.params.id, tenantId);
   if (!invoice) {
