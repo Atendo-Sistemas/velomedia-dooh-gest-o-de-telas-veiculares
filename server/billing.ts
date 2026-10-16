@@ -149,7 +149,7 @@ export class VeloPixGatewayAdapter {
         `/payments?${query.toString()}`,
       );
       const existing = existingPayments.data?.find(payment =>
-        ['PENDING', 'OVERDUE', 'AWAITING_RISK_ANALYSIS'].includes(payment.status || ''),
+        ['PENDING', 'OVERDUE', 'AWAITING_RISK_ANALYSIS', 'RECEIVED', 'CONFIRMED'].includes(payment.status || ''),
       );
       const payment = existing || await this.asaasRequest<{ id?: string }>('/payments', {
         method: 'POST',

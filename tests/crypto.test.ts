@@ -101,9 +101,14 @@ describe('VeloMedia DOOH Cryptographic Engine', () => {
 
       const result = await new VeloPixGatewayAdapter().createPixCharge({
         invoiceId: 'invoice-test',
+        organizationId: 'org-test',
         amount: 10,
         organizationName: 'Test',
         description: 'Test charge',
+        dueDate: '2026-10-30',
+        cnpj: '12345678000195',
+        email: 'billing@example.com',
+        phone: '',
       });
 
       expect(result.status).toBe('payment_provider_not_configured');

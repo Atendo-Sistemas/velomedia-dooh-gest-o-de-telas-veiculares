@@ -883,12 +883,14 @@ apiRouter.post('/webhooks/asaas', async (req: Request, res: Response) => {
       payment &&
       typeof payment.id === 'string' &&
       typeof payment.externalReference === 'string' &&
+      payment.externalReference.startsWith('invoice:') &&
       (paidEvents.has(event.event) || overdueEvents.has(event.event))
     ) {
+      const invoiceId = payment.externalReference.slice('invoice:'.length);
       const organizations = await repository.getOrganizations();
       const matchingInvoices: Array<{ invoice: SaaSInvoice; organizationId: string }> = [];
       for (const organization of organizations) {
-        const invoice = await repository.getInvoiceById(payment.externalReference, organization.id);
+        const invoice = await repository.getInvoiceById(invoiceId, organization.id);
         if (invoice && invoice.txid === payment.id && Number(payment.value) === invoice.amount) {
           matchingInvoices.push({ invoice, organizationId: organization.id });
         }
