@@ -107,8 +107,8 @@ export class VeloStorage {
   private memoryDb: DatabaseSchema;
 
   constructor(filePath?: string) {
-    if (!filePath && process.env.NODE_ENV === 'production' && !process.env.DATA_FILE_PATH) {
-      throw new Error('DATA_FILE_PATH must point to persistent storage in production.');
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('VeloStorage JSON persistence is development-only; use PostgreSQL in production.');
     }
     this.dataFilePath = path.resolve(filePath || process.env.DATA_FILE_PATH || path.join(process.cwd(), 'data', 'velomedia_store.json'));
 
@@ -481,7 +481,7 @@ export class VeloStorage {
           currentFps: 60,
           brightness: 85,
           volume: 40,
-          appVersion: '2.5.0-beta.1',
+          appVersion: '2.5.0-beta.2',
           lastHeartbeat: new Date().toISOString(),
           kioskLocked: true,
           screenUptimeTodayHours: 8.5,

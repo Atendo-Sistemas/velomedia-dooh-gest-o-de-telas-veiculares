@@ -47,7 +47,18 @@ async function importFile(filePath: string): Promise<void> {
           (SELECT COUNT(*) FROM pairing_tokens) +
           (SELECT COUNT(*) FROM remote_commands) +
           (SELECT COUNT(*) FROM device_credentials) +
-          (SELECT COUNT(*) FROM anti_replay_nonces)
+          (SELECT COUNT(*) FROM anti_replay_nonces) +
+          (SELECT COUNT(*) FROM webhook_events) +
+          (SELECT COUNT(*) FROM organizations) +
+          (SELECT COUNT(*) FROM users) +
+          (SELECT COUNT(*) FROM drivers) +
+          (SELECT COUNT(*) FROM devices) +
+          (SELECT COUNT(*) FROM campaigns) +
+          (SELECT COUNT(*) FROM geofences) +
+          (SELECT COUNT(*) FROM proof_of_play_logs) +
+          (SELECT COUNT(*) FROM advertisers) +
+          (SELECT COUNT(*) FROM invoices) +
+          (SELECT COUNT(*) FROM audit_logs)
         )::text AS count
       `);
       if (Number(existing.rows[0].count) !== 0) {

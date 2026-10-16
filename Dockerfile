@@ -5,6 +5,7 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
+RUN npx esbuild server/db/import-json.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/db-import.cjs
 
 FROM node:22-alpine AS runtime
 

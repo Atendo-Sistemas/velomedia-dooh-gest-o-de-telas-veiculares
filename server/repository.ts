@@ -25,6 +25,8 @@ import type {
 
 import { storage } from './storage';
 import { PostgresRepository } from './postgres-repository';
+import { projectPublicPlayer } from './public-player';
+import type { PublicPlayerBootstrap } from './public-player';
 
 export interface VeloRepository {
   // Organizations
@@ -50,6 +52,7 @@ export interface VeloRepository {
   getDevices(orgId: string): Promise<Device[]>;
   getDeviceById(id: string, orgId: string): Promise<Device | undefined>;
   getDeviceByIdInternal(id: string): Promise<Device | undefined>;
+  getPublicPlayerBootstrap(deviceCode: string): Promise<PublicPlayerBootstrap | undefined>;
   saveDevice(device: Device, orgId: string): Promise<Device | null>;
   deleteDevice(id: string, orgId: string): Promise<boolean>;
 
@@ -112,8 +115,15 @@ export interface VeloRepository {
 
   // Atomic device security operations
   consumePairingToken(token: string): Promise<PairingTokenRecord | undefined>;
+  consumeAndProvisionDevice(
+    token: string,
+    device: Device,
+    credential: DeviceCredentialRecord,
+    audit?: Omit<AuditLog, 'id' | 'createdAt'>,
+  ): Promise<boolean>;
   recordProofOfPlayAndReplay(log: ProofOfPlayLog, orgId: string): Promise<boolean>;
   close?(): Promise<void>;
+  ping(): Promise<void>;
 }
 
 /**
@@ -121,12 +131,13 @@ export interface VeloRepository {
  */
 export class JsonDevelopmentRepository implements VeloRepository {
   constructor() {
-    if (process.env.NODE_ENV === 'production' && process.env.STRICT_PROD_ENV === 'true') {
+    if (process.env.NODE_ENV === 'production') {
       throw new Error(
         'Segurança Crítica: JsonDevelopmentRepository não pode ser instanciado em ambiente de produção estrita. Use PostgresRepository com DATABASE_URL.'
       );
     }
   }
+  async ping(): Promise<void> {}
 
   async getOrganizations(): Promise<SaaSOrganization[]> {
     return storage.getOrganizations();
@@ -178,6 +189,19 @@ export class JsonDevelopmentRepository implements VeloRepository {
   }
   async getDeviceByIdInternal(id: string): Promise<Device | undefined> {
     return storage.getDeviceByIdInternal(id);
+  }
+  async getPublicPlayerBootstrap(deviceCode: string): Promise<PublicPlayerBootstrap | undefined> {
+    const matches = storage.getOrganizations()
+      .flatMap(org => storage.getDevices(org.id))
+      .filter(candidate => candidate.code === deviceCode && candidate.status !== 'retired');
+    if (matches.length !== 1) return undefined;
+    const device = matches[0];
+    if (!device?.organizationId) return undefined;
+    return projectPublicPlayer(
+      device,
+      storage.getCampaigns(device.organizationId),
+      storage.getGeoFences(device.organizationId),
+    );
   }
   async saveDevice(device: Device, orgId: string): Promise<Device | null> {
     return storage.saveDevice(device, orgId);
@@ -295,7 +319,18 @@ export class JsonDevelopmentRepository implements VeloRepository {
     if (record) storage.markPairingTokenUsed(token);
     return record;
   }
+  async consumeAndProvisionDevice(token: string, device: Device, credential: DeviceCredentialRecord, audit?: Omit<AuditLog, 'id' | 'createdAt'>): Promise<boolean> {
+    const record = storage.getPairingToken(token);
+    if (!record || record.organizationId !== device.organizationId) return false;
+    storage.markPairingTokenUsed(token);
+    const saved = storage.saveDevice(device, record.organizationId);
+    if (!saved) return false;
+    storage.saveDeviceCredential(credential);
+    if (audit) storage.logAudit(audit);
+    return true;
+  }
   async recordProofOfPlayAndReplay(log: ProofOfPlayLog, orgId: string): Promise<boolean> {
+    if (!log.nonce) return false;
     const replay = storage.checkAndRecordReplay(log.id, log.nonce, new Date(log.endedAt || log.timestamp).getTime());
     return replay.valid && storage.recordProofOfPlay(log, orgId);
   }

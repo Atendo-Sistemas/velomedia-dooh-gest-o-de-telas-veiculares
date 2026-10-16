@@ -527,13 +527,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                 </div>
 
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-[10px] text-slate-400 block">Senha PIN Kiosk:</span>
-                  <span className="text-xs font-mono font-bold text-purple-300">8822</span>
-                </div>
-
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
                   <span className="text-[10px] text-slate-400 block">Modo Standalone PWA:</span>
-                  <span className="text-xs font-bold text-cyan-400">Ativado v2.9</span>
+                  <span className="text-xs font-bold text-cyan-400">Disponível</span>
                 </div>
               </div>
 

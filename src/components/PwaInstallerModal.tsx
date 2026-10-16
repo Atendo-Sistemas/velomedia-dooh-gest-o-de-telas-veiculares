@@ -451,7 +451,7 @@ export const PwaInstallerModal: React.FC<PwaInstallerModalProps> = ({
               <Lock className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
               <div>
                 <span className="text-xs font-bold text-white block">Bloqueio Kiosk com PIN</span>
-                <span className="text-[11px] text-slate-400">Passageiros não conseguem sair ou fechar o player sem a senha master (8822).</span>
+                <span className="text-[11px] text-slate-400">O link de quiosque abre o player sem os controles administrativos.</span>
               </div>
             </div>
 

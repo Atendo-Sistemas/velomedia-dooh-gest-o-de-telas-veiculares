@@ -54,11 +54,17 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       try {
         const parsed = new URL(databaseUrl);
         if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
-          errors.push('DATABASE_URL deve ser uma URL PostgreSQL com host, database e credenciais configurados.');
+          errors.push('DATABASE_URL deve ser uma URL PostgreSQL com host e database configurados.');
         }
       } catch {
         errors.push('DATABASE_URL deve ser uma URL PostgreSQL válida.');
       }
+    }
+    if (env.PG_POOL_MAX && (!/^\d+$/.test(env.PG_POOL_MAX) || Number(env.PG_POOL_MAX) < 1 || Number(env.PG_POOL_MAX) > 100)) {
+      errors.push('PG_POOL_MAX deve ser um inteiro entre 1 e 100.');
+    }
+    if (env.PGSSL && !['true', 'false'].includes(env.PGSSL.toLowerCase())) {
+      errors.push('PGSSL deve ser true ou false.');
     }
 
     const host = env.HOST?.trim();

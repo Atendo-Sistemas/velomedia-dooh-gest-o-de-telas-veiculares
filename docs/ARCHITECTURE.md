@@ -69,7 +69,7 @@ O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de m�
     "location": { "lat": -23.5505, "lng": -46.6333 },
     "speedKmH": 28.4,
     "nonce": "c4ca4238a0b923820dcc509a6f75849b",
-    "playerVersion": "2.5.0-beta.1",
+    "playerVersion": "2.5.0-beta.2",
     "signature": "hmac_sha256_hex_string"
   }
   ```
@@ -94,3 +94,8 @@ O **VeloMedia DOOH** é uma plataforma SaaS multi-tenant para veiculação de m�
 - A inicialização serializa e aplica o `schema.sql` e migrações SQL versionadas, com registro em `schema_migrations`. As operações async da API e autenticação compartilham o repositório PostgreSQL.
 - Dados de domínio usam JSONB em `repository_records` para preservar integralmente os contratos TypeScript atuais. Sessões, credenciais de dispositivo, tokens de pareamento, ledger anti-replay, webhooks e comandos remotos usam tabelas dedicadas. O consumo de token é um único `UPDATE ... RETURNING`; PoP, replay e contadores usam uma transação com bloqueio de linhas.
 - `server/db/import-json.ts` importa uma cópia de um armazenamento JSON existente para um banco vazio sem alterar a fonte nem substituir hashes de senha importados.
+
+### 2.7. Bootstrap público do player
+- `GET /api/v1/player/:deviceCode` é público e read-only para abrir QR/PWA sem sessão administrativa. Procura o código exato, recusa telas inexistentes/retiradas e carrega campanhas somente do tenant dono da tela.
+- Contrato estável (`PublicPlayerBootstrap` em `src/types.ts`): `{ device: { id, code, model, screenPosition, status }, campaigns: [{ id, name, advertiser, creative, schedule: { endDate } }], geoFences: [] }`. Campanhas ativas e elegíveis para a geofence da tela são filtradas no servidor e ordenadas por prioridade; budget/statistics, targeting, tenant columns, and the device location are not returned.
+- Não retorna organização, telemetria/localização, placa/motorista, número de série, credenciais, sessões, métricas ou dados de faturamento. Campos de `device` e `campaigns` são projeções explícitas no repositório, para JSON e PostgreSQL.

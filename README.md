@@ -20,6 +20,7 @@ Production requires a valid PostgreSQL `DATABASE_URL`; startup fails closed if i
 The API preserves its existing domain object shapes as JSONB records in `repository_records`, indexed by type and tenant. Sessions, device credentials, pairing tokens, replay nonces, webhook idempotency and remote commands use dedicated PostgreSQL tables. Tenant-scoped operations query and mutate records with their organization ID. Pairing-token consumption is atomic; PoP/replay insertion and campaign/device/driver counters run in a database transaction with row locks. PostgreSQL is the production source of truth; back up the database, not an app JSON file.
 
 PIX provider integration, real payment webhooks and driver payouts are not implemented. The API rejects these operations rather than claiming a payment was processed.
+The public QR player loads display-safe campaign data without an admin session. Proof-of-play submissions still require a provisioned device credential and signed request; the public kiosk bootstrap does not expose or create that credential.
 
 ### Docker Compose
 
@@ -31,7 +32,7 @@ PIX provider integration, real payment webhooks and driver payouts are not imple
    chmod 600 .env
    ```
 
-2. Set `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (at least 16 characters), `WEBHOOK_SECRET` (`openssl rand -hex 32`), `POSTGRES_PASSWORD` (`openssl rand -hex 24`), and `CORS_ALLOWED_ORIGINS` to the HTTPS origin. Use a URL-safe hex DB password for Compose's generated URL. Set `APP_HOST_PORT` to a free local port (default `3300`); do not expose it publicly.
+2. Set `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (at least 16 characters), `WEBHOOK_SECRET` (`openssl rand -hex 32`), `POSTGRES_PASSWORD` and `POSTGRES_APP_PASSWORD` (`openssl rand -hex 24` for each), and `CORS_ALLOWED_ORIGINS` to the HTTPS origin. Compose initializes a database owner and a separate app role; the app role receives only the database/schema privileges required for startup migrations. Use URL-safe hex credentials for Compose's generated app URL. Set `APP_HOST_PORT` to a free local port (default `3300`); do not expose it publicly.
 
 3. Start and verify:
 
@@ -41,7 +42,7 @@ PIX provider integration, real payment webhooks and driver payouts are not imple
    curl --fail http://127.0.0.1:3300/api/health
    ```
 
-   PostgreSQL runs privately with a readiness health check and named volume `velomedia_postgres`; the app waits for PostgreSQL to be healthy. Only the app port is published on loopback. `docker compose down` retains the volume. Never use `docker compose down -v` if you need the data.
+   PostgreSQL runs privately with a readiness health check and named volume `velomedia_postgres`; the app waits for PostgreSQL to be healthy. The app's `/api/health` check also verifies a database connection. Only the app port is published on loopback. `docker compose down` retains the volume. Never use `docker compose down -v` if you need the data.
 
 4. Configure the real domain in `deploy/Caddyfile.docker`; keep the `reverse_proxy` target on the matching loopback port. Point DNS to the VPS, configure the shared reverse proxy without replacing other sites, and allow only SSH/HTTP/HTTPS through the firewall.
 
@@ -49,17 +50,25 @@ PIX provider integration, real payment webhooks and driver payouts are not imple
 
 ### Migrate an existing JSON VPS
 
-First stop the old app, take a protected backup/copy of its JSON store, create an **empty** PostgreSQL database, and configure `DATABASE_URL`, `INITIAL_ADMIN_EMAIL`, and `INITIAL_ADMIN_PASSWORD`. Run the one-time importer from the repository root:
+First stop the old app, take a protected backup/copy of its JSON store, create an **empty** PostgreSQL database, and configure `DATABASE_URL`, `INITIAL_ADMIN_EMAIL`, and `INITIAL_ADMIN_PASSWORD`. For a systemd/host installation run from the repository root (with development dependencies installed):
 
 ```sh
 npx tsx server/db/import-json.ts /secure/path/velomedia_store.json
+```
+
+For Docker Compose, build the app image first, then run the bundled importer in a one-off app container (the source mount is read-only):
+
+```sh
+docker compose run --rm --user "$(id -u):$(id -g)" \
+  -v /secure/path/velomedia_store.json:/migration/source.json:ro \
+  --entrypoint node app dist/db-import.cjs /migration/source.json
 ```
 
 The importer rejects non-empty repository/session/security tables, imports the existing users with their password hashes (plus active sessions and device security state), and leaves the source file untouched. It runs migrations before importing and then performs the normal super-admin bootstrap without replacing an imported password hash. Verify record counts and sign-in before directing traffic to the new app. Keep the JSON backup until a PostgreSQL backup has been restored and checked.
 
 ### systemd with a separately managed PostgreSQL server
 
-Install Node.js 22+, PostgreSQL, Caddy and a non-login `velomedia` service user. Install dependencies and build as documented below. Copy `.env.example` to `/etc/velomedia/velomedia.env`, set `DATABASE_URL` to the PostgreSQL connection string, configure the initial admin, webhook secret and HTTPS CORS origin, then restrict the file to root and the service group (`0640`). Set `PGSSL=true` where the database provider requires TLS. Install `deploy/velomedia.service` and `deploy/Caddyfile`; configure the real hostname and start with:
+Install Node.js 22+, PostgreSQL, Caddy and a non-login `velomedia` service user. Install dependencies and build (`npm ci && npm run build`). Have a database administrator preinstall `uuid-ossp` and `pgcrypto`, then grant the app role database connect and schema usage/create privileges required for versioned startup migrations. Copy `.env.example` to `/etc/velomedia/velomedia.env`, set `DATABASE_URL` to the PostgreSQL connection string, configure the initial admin, webhook secret and HTTPS CORS origin, then restrict the file to root and the service group (`0640`). Set `PGSSL=true` where the database provider requires TLS. Install `deploy/velomedia.service` and `deploy/Caddyfile`; configure the real hostname and start with:
 
 ```sh
 sudo systemctl daemon-reload

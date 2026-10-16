@@ -10,8 +10,11 @@ CREATE INDEX IF NOT EXISTS idx_repository_records_tenant_kind
     ON repository_records(organization_id, kind, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_repository_records_user_email
     ON repository_records(lower(payload->>'email')) WHERE kind = 'user';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repository_records_device_code
+    ON repository_records(payload->>'code') WHERE kind = 'device';
 
 ALTER TABLE anti_replay_nonces ADD COLUMN IF NOT EXISTS event_id VARCHAR(64);
+ALTER TABLE anti_replay_nonces ALTER COLUMN event_id TYPE VARCHAR(256);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_replay_event_id ON anti_replay_nonces(event_id) WHERE event_id IS NOT NULL;
 
 ALTER TABLE pairing_tokens ALTER COLUMN driver_id DROP NOT NULL;

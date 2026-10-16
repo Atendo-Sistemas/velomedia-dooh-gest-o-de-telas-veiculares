@@ -7,7 +7,8 @@ import type {
   SaaSOrganization, 
   SaaSUser, 
   AdvertiserAccount, 
-  SaaSInvoice 
+  SaaSInvoice,
+  PublicPlayerBootstrap,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -51,8 +52,8 @@ export const apiClient = {
   async getMe(): Promise<{ authenticated: boolean; user?: SaaSUser; organization?: SaaSOrganization }> {
     return request('/auth/me');
   },
-  async getPublicPlayer(deviceCode: string): Promise<{ device: Device; campaigns: Campaign[]; geoFences: GeoFence[] }> {
-    return request(`/player/${encodeURIComponent(deviceCode)}`);
+  async getPublicPlayer(deviceCode: string): Promise<PublicPlayerBootstrap> {
+    return request<PublicPlayerBootstrap>(`/player/${encodeURIComponent(deviceCode)}`);
   },
 
   // Organizations

@@ -299,6 +299,19 @@ export interface Campaign {
   priority: number; // 1-10
 }
 
+export type PublicPlayerDevice = Pick<Device, 'id' | 'code' | 'model' | 'screenPosition' | 'status'>;
+
+export type PublicPlayerCampaign = Pick<
+  Campaign,
+  'id' | 'name' | 'advertiser' | 'creative'
+> & { schedule: Pick<CampaignSchedule, 'endDate'> };
+
+export interface PublicPlayerBootstrap {
+  device: PublicPlayerDevice;
+  campaigns: PublicPlayerCampaign[];
+  geoFences: GeoFence[];
+}
+
 export interface ProofOfPlayLog {
   id: string;
   organizationId?: string;

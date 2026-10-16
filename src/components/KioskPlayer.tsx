@@ -32,15 +32,15 @@ import {
   Sparkles
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { Campaign, Device, GeoFence, ProofOfPlayLog } from '../types';
+import { Campaign, Device, GeoFence, ProofOfPlayLog, PublicPlayerCampaign, PublicPlayerDevice } from '../types';
 import { PASSENGER_TRIVIA, CITY_NEWS } from '../data/mockData';
 import { generateProofOfPlayHash, getMatchingGeoFences, isCampaignEligible } from '../services/telemetryEngine';
 
 export type ScreenAspectFormat = 'fullscreen_fill' | 'ratio_16_9' | 'ratio_16_10' | 'ratio_4_3';
 
 interface KioskPlayerProps {
-  device: Device;
-  campaigns: Campaign[];
+  device: Device | PublicPlayerDevice;
+  campaigns: Array<Campaign | PublicPlayerCampaign>;
   geoFences: GeoFence[];
   simplified?: boolean;
   onExitPlayer: () => void;
@@ -144,9 +144,15 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
     };
   }, []);
 
-  // Get eligible campaigns based on current device location
-  const matchingGfs = getMatchingGeoFences(device.currentLocation.lat, device.currentLocation.lng, geoFences);
-  const eligibleCampaigns = campaigns.filter((c) => isCampaignEligible(c, device, geoFences));
+  // Public kiosk bootstrap data has no telemetry location; its playlist is already tenant-filtered.
+  const deviceLocation = 'currentLocation' in device ? device.currentLocation : undefined;
+  const matchingGfs = deviceLocation
+    ? getMatchingGeoFences(deviceLocation.lat, deviceLocation.lng, geoFences)
+    : [];
+  const eligibleCampaigns = deviceLocation
+    ? campaigns.filter((campaign): campaign is Campaign =>
+      'budgetTotal' in campaign && isCampaignEligible(campaign, device as Device, geoFences))
+    : campaigns;
   const activeCampaignList = eligibleCampaigns;
 
   const currentCampaign = activeCampaignList[currentCampaignIndex % activeCampaignList.length] || (simplified ? undefined : campaigns[0]);
@@ -177,7 +183,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
           if (activeCampaignList.length === 0) return 15;
 
           // Record Proof of Play
-          if (currentCampaign) {
+          if (currentCampaign && deviceLocation) {
             const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
             const popLog: ProofOfPlayLog = {
               id: `pop_${Date.now()}`,
@@ -187,7 +193,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               campaignName: currentCampaign.name,
               advertiser: currentCampaign.advertiser,
               durationWatchedSec: currentCampaign.creative.durationSeconds || 15,
-              location: device.currentLocation,
+              location: deviceLocation,
               interacted: false,
               verifiedHash: generateProofOfPlayHash(device.id, currentCampaign.id, timestamp),
               syncedOnline: device.status === 'online',
@@ -390,6 +396,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       origin: { y: 0.7 },
     });
 
+    if (!deviceLocation) return;
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     onRecordProofOfPlay({
       id: `pop_scan_${Date.now()}`,
@@ -399,7 +406,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
       campaignName: currentCampaign.name,
       advertiser: currentCampaign.advertiser,
       durationWatchedSec: 15,
-      location: device.currentLocation,
+      location: deviceLocation,
       interacted: true,
       interactionType: 'qr_scan',
       verifiedHash: generateProofOfPlayHash(device.id, currentCampaign.id, timestamp),
@@ -496,13 +503,13 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="text-xs font-bold text-white truncate max-w-[110px] sm:max-w-none">{device.driverName}</span>
+                <span className="text-xs font-bold text-white truncate max-w-[110px] sm:max-w-none">{'driverName' in device ? device.driverName : 'Tela veicular'}</span>
                 <span className="text-[10px] bg-slate-800 text-cyan-300 font-mono px-1.5 py-0.2 rounded font-semibold border border-slate-700">
-                  {device.carPlate}
+                  {'carPlate' in device ? device.carPlate : device.code}
                 </span>
               </div>
               <div className="text-[10px] text-slate-400 flex items-center space-x-1">
-                <span>{device.carModel}</span>
+                <span>{'carModel' in device ? device.carModel : device.model}</span>
                 <span>•</span>
                 <span className="text-emerald-400 font-semibold">★ 4.98</span>
               </div>
@@ -525,7 +532,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
             
             <MapPin className="w-3.5 h-3.5 text-cyan-400 animate-bounce" />
             <span className="text-xs font-medium text-slate-300 truncate max-w-[180px]">
-              {device.currentLocation.neighborhood || 'Av. Paulista, SP'}
+              {deviceLocation?.neighborhood || 'Localização indisponível'}
             </span>
             {matchingGfs.length > 0 && (
               <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full font-bold">
@@ -761,10 +768,9 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
                 <span className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Corrida em Andamento</span>
                 <span className="text-emerald-400 font-mono font-bold">48 km/h</span>
               </div>
-              )}
               <div className="flex items-center space-x-2">
                 <Navigation className="w-4 h-4 text-cyan-400 flex-shrink-0" />
-                <span className="text-xs font-bold text-white truncate">{device.currentLocation.address || 'Av. Paulista, 1578'}</span>
+                <span className="text-xs font-bold text-white truncate">{deviceLocation?.address || device.model}</span>
               </div>
               <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                 <div className="bg-cyan-400 h-full rounded-full w-2/3 animate-pulse" />
@@ -836,8 +842,8 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
                 {CITY_NEWS[0].title}
               </p>
             </div>
-
           </div>
+          )}
 
         </div>
 
@@ -1093,7 +1099,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               <div className="p-3 bg-slate-800/60 rounded-xl space-y-2 text-xs">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Região de Atendimento:</span>
-                  <span className="text-white font-medium">{device.currentLocation.neighborhood}</span>
+                  <span className="text-white font-medium">{deviceLocation?.neighborhood || 'Localização indisponível'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Oferta Válida Até:</span>
@@ -1144,7 +1150,7 @@ export const KioskPlayer: React.FC<KioskPlayerProps> = ({
               </div>
               <div className="p-3 bg-slate-800/60 rounded-xl">
                 <span className="text-slate-400 block">Tensão Bateria:</span>
-                <span className="font-mono font-bold text-white">{device.telemetry.batteryVoltage}V</span>
+                <span className="font-mono font-bold text-white">{'telemetry' in device ? `${device.telemetry.batteryVoltage}V` : '—'}</span>
               </div>
               <div className="p-3 bg-slate-800/60 rounded-xl">
                 <span className="text-slate-400 block">Fila Offline PoP:</span>

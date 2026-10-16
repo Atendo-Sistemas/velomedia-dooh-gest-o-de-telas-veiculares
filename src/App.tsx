@@ -21,7 +21,7 @@ import { AdvertiserPortal } from './components/AdvertiserPortal';
 import { PassengerPortal } from './components/PassengerPortal';
 import { RegistrationCenter } from './components/RegistrationCenter';
 import { LoginPage } from './components/LoginPage';
-import { Campaign, Device, Driver, GeoFence, ProofOfPlayLog, SaaSOrganization, SaaSUser, AdvertiserAccount } from './types';
+import { Campaign, Device, Driver, GeoFence, ProofOfPlayLog, SaaSOrganization, SaaSUser, AdvertiserAccount, PublicPlayerCampaign, PublicPlayerDevice } from './types';
 import { 
   INITIAL_CAMPAIGNS, 
   INITIAL_DEVICES, 
@@ -86,8 +86,8 @@ export default function App() {
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
   const [isLoadingKiosk, setIsLoadingKiosk] = useState(isKioskMode);
   const [kioskError, setKioskError] = useState<string | null>(null);
-  const [kioskDevice, setKioskDevice] = useState<Device | null>(null);
-  const [kioskCampaigns, setKioskCampaigns] = useState<Campaign[]>([]);
+  const [kioskDevice, setKioskDevice] = useState<PublicPlayerDevice | null>(null);
+  const [kioskCampaigns, setKioskCampaigns] = useState<PublicPlayerCampaign[]>([]);
   const [kioskGeoFences, setKioskGeoFences] = useState<GeoFence[]>([]);
   
   // Primary persistent state

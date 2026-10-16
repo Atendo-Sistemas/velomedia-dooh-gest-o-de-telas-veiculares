@@ -216,7 +216,7 @@ export const GeoFenceSchema = z.object({
  * Proof of Play submission schema matching Section 6.1 requirements
  */
 export const ProofOfPlaySubmissionSchema = z.object({
-  eventId: z.string().min(1, 'eventId é obrigatório'),
+  eventId: z.string().min(1, 'eventId é obrigatório').max(64),
   deviceId: z.string().min(1, 'deviceId é obrigatório'),
   campaignId: z.string().min(1, 'campaignId é obrigatório'),
   creativeId: z.string().optional(),
@@ -237,7 +237,7 @@ export const ProofOfPlaySubmissionSchema = z.object({
   }),
   interacted: z.boolean().default(false),
   interactionType: z.enum(['none', 'qr_scan', 'touch_interaction', 'lead_form', 'trivia_answer']).default('none'),
-  nonce: z.string().min(8, 'nonce deve ter pelo menos 8 caracteres'),
+  nonce: z.string().min(8, 'nonce deve ter pelo menos 8 caracteres').max(64),
   signature: z.string().min(16, 'signature criptográfica do dispositivo é obrigatória'),
 });
 

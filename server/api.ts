@@ -60,14 +60,35 @@ for (const method of routeMethods) {
 // ============================================================================
 // 1. HEALTH & METRICS
 // ============================================================================
-apiRouter.get('/health', (_req: Request, res: Response) => {
+apiRouter.get('/health', async (_req: Request, res: Response) => {
+  try {
+    await repository.ping();
+  } catch {
+    res.status(503).json({ status: 'unhealthy', timestamp: new Date().toISOString() });
+    return;
+  }
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.5.0-beta.1',
+    version: '2.5.0-beta.2',
     environment: process.env.NODE_ENV || 'production',
   });
+});
+
+apiRouter.get('/player/:deviceCode', async (req: Request, res: Response) => {
+  res.set('Cache-Control', 'no-store');
+  const deviceCode = req.params.deviceCode;
+  if (!deviceCode || deviceCode.length > 64) {
+    res.status(404).json({ error: 'player_not_found', message: 'Player não encontrado.' });
+    return;
+  }
+  const player = await repository.getPublicPlayerBootstrap(deviceCode);
+  if (!player) {
+    res.status(404).json({ error: 'player_not_found', message: 'Player não encontrado.' });
+    return;
+  }
+  res.json(player);
 });
 
 // ============================================================================
@@ -330,14 +351,13 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
     return;
   }
 
-  const tokenRecord = await repository.consumePairingToken(pairingCode);
+  const tokenRecord = await repository.getPairingToken(pairingCode);
   if (!tokenRecord) {
     recordFailedPairing(ip);
     res.status(400).json({ error: 'invalid_code', message: 'Código de pareamento inválido ou expirado.' });
     return;
   }
 
-  resetPairingRateLimit(ip);
   const orgId = tokenRecord.organizationId;
   const driver = tokenRecord.driverId ? await repository.getDriverById(tokenRecord.driverId, orgId) : undefined;
   const deviceId = `dev_${randomUUID()}`;
@@ -377,7 +397,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.5.0-beta.1',
+      appVersion: '2.5.0-beta.2',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
@@ -409,23 +429,14 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
     organizationId: orgId,
   };
 
-  const savedDevice = await repository.saveDevice(newDevice, orgId);
-  if (!savedDevice) {
-    res.status(409).json({ error: 'device_conflict', message: 'Não foi possível registrar o dispositivo neste tenant.' });
-    return;
-  }
-
-  // Store cryptographic credentials for this tablet
-  await repository.saveDeviceCredential({
+  const paired = await repository.consumeAndProvisionDevice(pairingCode, newDevice, {
     deviceId,
     organizationId: orgId,
     deviceSecret,
     revoked: false,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
-  });
-
-  await repository.logAudit({
+  }, {
     organizationId: orgId,
     action: 'DEVICE_PAIRED',
     resource: 'devices',
@@ -433,6 +444,12 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
     details: { model, serialNumber, driverId: driver?.id },
     ipAddress: req.ip,
   });
+  if (!paired) {
+    recordFailedPairing(ip);
+    res.status(400).json({ error: 'invalid_code', message: 'Código de pareamento inválido, expirado ou já utilizado.' });
+    return;
+  }
+  resetPairingRateLimit(ip);
 
   // Return device and one-time provisioned deviceSecret
   res.status(201).json({

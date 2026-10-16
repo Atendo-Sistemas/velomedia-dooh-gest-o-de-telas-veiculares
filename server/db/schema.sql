@@ -1,5 +1,5 @@
 -- VeloMedia DOOH Production PostgreSQL Relational Database Schema
--- Version: 2.5.0-beta.1
+-- Version: 2.5.0-beta.2
 -- Multi-tenant isolation with strict foreign keys, indexes, and audit trails
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -305,3 +305,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_logs(organization_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+
+-- 16. Remote Commands (MDM)
+CREATE TABLE IF NOT EXISTS remote_commands (
+    id VARCHAR(64) PRIMARY KEY,
+    organization_id VARCHAR(64) NOT NULL,
+    device_id VARCHAR(64) NOT NULL,
+    command VARCHAR(32) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    acknowledged_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_remote_commands_pending
+    ON remote_commands(organization_id, device_id, status, created_at);

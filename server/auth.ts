@@ -234,6 +234,10 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
     });
     return;
   }
+  if (deviceId.length > 64 || nonce.length > 64 || signature.length > 128) {
+    res.status(400).json({ error: 'invalid_device_auth_headers', message: 'Cabeçalhos de autenticação de dispositivo inválidos.' });
+    return;
+  }
 
   const timestampMs = parseInt(timestamp, 10);
   if (isNaN(timestampMs)) {
@@ -295,7 +299,7 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
 
   // 5. Look up device entity
   const device = await repository.getDeviceByIdInternal(deviceId);
-  if (!device || device.status === 'retired') {
+  if (!device || device.status === 'retired' || device.organizationId !== cred.organizationId) {
     res.status(403).json({
       error: 'device_disabled',
       message: 'Dispositivo desativado ou não registrado.',

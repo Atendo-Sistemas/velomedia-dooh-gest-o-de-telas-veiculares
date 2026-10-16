@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
+import type { PoolClient } from 'pg';
 import type {
   SaaSOrganization, SaaSUser, Driver, Device, Campaign, GeoFence,
   AdvertiserAccount, SaaSInvoice, ProofOfPlayLog,
@@ -7,6 +8,8 @@ import type {
 import type {
   VeloRepository,
 } from './repository';
+import { projectPublicPlayer } from './public-player';
+import type { PublicPlayerBootstrap } from './public-player';
 import type {
   AuditLog, DeviceCredentialRecord, PairingTokenRecord, RemoteCommandRecord,
   SessionRecord, WebhookRecord,
@@ -31,6 +34,10 @@ export class PostgresRepository implements VeloRepository {
     this.pool.on('error', error => console.error('[PostgreSQL] Idle client error:', error.message));
   }
 
+  async ping(): Promise<void> {
+    await this.pool.query('SELECT 1');
+  }
+
   async initialize(options: { bootstrapAdmin?: boolean } = {}): Promise<void> {
     await this.pool.query('SELECT 1');
     const { readFile } = await import('node:fs/promises');
@@ -42,13 +49,17 @@ export class PostgresRepository implements VeloRepository {
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['velomedia-schema-migrations']);
-      const schema = await readFile(join(process.cwd(), 'server/db/schema.sql'), 'utf8');
-      await client.query(schema);
       await client.query(`
         CREATE TABLE IF NOT EXISTS schema_migrations (
           version VARCHAR(255) PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+      const baseline = await client.query('SELECT 1 FROM schema_migrations WHERE version=$1', ['000_initial_schema.sql']);
+      if (!baseline.rowCount) {
+        const schema = await readFile(join(process.cwd(), 'server/db/schema.sql'), 'utf8');
+        await client.query(schema);
+        await client.query('INSERT INTO schema_migrations(version) VALUES ($1)', ['000_initial_schema.sql']);
+      }
       for (const name of migrations) {
         const { rowCount } = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [name]);
         if (rowCount) continue;
@@ -142,7 +153,7 @@ export class PostgresRepository implements VeloRepository {
       : await this.pool.query<StoredRow<T>>('SELECT payload FROM repository_records WHERE kind=$1 ORDER BY created_at DESC', [kind]);
     return result.rows.map(row => row.payload);
   }
-  private async byId<T>(kind: string, id: string, orgId?: string, client = this.pool): Promise<T | undefined> {
+  private async byId<T>(kind: string, id: string, orgId?: string, client: Pool | PoolClient = this.pool): Promise<T | undefined> {
     const result = orgId
       ? await client.query<StoredRow<T>>('SELECT payload FROM repository_records WHERE kind=$1 AND id=$2 AND organization_id=$3', [kind, id, orgId])
       : await client.query<StoredRow<T>>('SELECT payload FROM repository_records WHERE kind=$1 AND id=$2', [kind, id]);
@@ -155,7 +166,7 @@ export class PostgresRepository implements VeloRepository {
     );
     return result.rows[0]?.payload;
   }
-  private async save<T extends { id: string }>(kind: string, value: T, orgId?: string, client = this.pool): Promise<boolean> {
+  private async save<T extends { id: string }>(kind: string, value: T, orgId?: string, client: Pool | PoolClient = this.pool): Promise<boolean> {
     const current = await client.query<{ organization_id: string | null }>(
       'SELECT organization_id FROM repository_records WHERE kind=$1 AND id=$2', [kind, value.id],
     );
@@ -176,7 +187,7 @@ export class PostgresRepository implements VeloRepository {
       : await this.pool.query('DELETE FROM repository_records WHERE kind=$1 AND id=$2', [kind, id]);
     return (result.rowCount || 0) > 0;
   }
-  private async findUserByEmail(email: string, client = this.pool): Promise<(SaaSUser & { passwordHash?: string }) | undefined> {
+  private async findUserByEmail(email: string, client: Pool | PoolClient = this.pool): Promise<(SaaSUser & { passwordHash?: string }) | undefined> {
     const result = await client.query<StoredRow<SaaSUser & { passwordHash?: string }>>(
       `SELECT payload FROM repository_records WHERE kind='user' AND lower(payload->>'email')=lower($1) LIMIT 1`, [email],
     );
@@ -184,8 +195,8 @@ export class PostgresRepository implements VeloRepository {
   }
 
   async getOrganizations() { return this.list<SaaSOrganization>('organization'); }
-  async getOrganizationById(id: string, client = this.pool) { return this.byId<SaaSOrganization>('organization', id, undefined, client); }
-  async saveOrganization(org: SaaSOrganization, client = this.pool) { await this.save('organization', org, undefined, client); }
+  async getOrganizationById(id: string, client: Pool | PoolClient = this.pool) { return this.byId<SaaSOrganization>('organization', id, undefined, client); }
+  async saveOrganization(org: SaaSOrganization, client: Pool | PoolClient = this.pool) { await this.save('organization', org, undefined, client); }
   async deleteOrganization(id: string) {
     const client = await this.pool.connect();
     try {
@@ -211,7 +222,7 @@ export class PostgresRepository implements VeloRepository {
     return safe;
   }
   async getUserByEmail(email: string) { return this.findUserByEmail(email); }
-  async saveUser(user: SaaSUser, password?: string, client = this.pool, preserveHash?: string) {
+  async saveUser(user: SaaSUser, password?: string, client: Pool | PoolClient = this.pool, preserveHash?: string) {
     const existing = await this.byId<SaaSUser & { passwordHash?: string }>('user', user.id, undefined, client);
     const passwordHash = password ? hashPassword(password) : (preserveHash || existing?.passwordHash);
     await this.save('user', { ...user, passwordHash }, user.organizationId, client);
@@ -254,6 +265,20 @@ export class PostgresRepository implements VeloRepository {
     if (byId) return byId;
     const result = await this.pool.query<StoredRow<Device>>("SELECT payload FROM repository_records WHERE kind='device' AND payload->>'code'=$1 LIMIT 1", [id]);
     return result.rows[0]?.payload;
+  }
+  async getPublicPlayerBootstrap(deviceCode: string): Promise<PublicPlayerBootstrap | undefined> {
+    if (!deviceCode || deviceCode.length > 64) return undefined;
+    const result = await this.pool.query<StoredRow<Device>>(
+      `SELECT payload FROM repository_records
+       WHERE kind='device' AND payload->>'code'=$1 AND payload->>'status'<>'retired'
+       LIMIT 1`,
+      [deviceCode],
+    );
+    const device = result.rows[0]?.payload;
+    if (!device?.organizationId) return undefined;
+    const campaigns = await this.getCampaigns(device.organizationId);
+    const geoFences = await this.getGeoFences(device.organizationId);
+    return projectPublicPlayer(device, campaigns, geoFences);
   }
   async saveDevice(value: Device, orgId: string) { const item = { ...value, organizationId: orgId }; return await this.save('device', item, orgId) ? item : null; }
   async deleteDevice(id: string, orgId: string) {
@@ -298,7 +323,12 @@ export class PostgresRepository implements VeloRepository {
   async saveInvoice(v: SaaSInvoice, orgId: string) { const item = { ...v, organizationId: orgId }; return await this.save('invoice', item, orgId) ? item : null; }
 
   async getProofOfPlayLogs(orgId: string, limit = 100) {
-    return this.list<ProofOfPlayLog>('proof_of_play', orgId).then(logs => logs.slice(0, Math.max(0, limit)));
+    const result = await this.pool.query<StoredRow<ProofOfPlayLog>>(
+      `SELECT payload FROM repository_records WHERE kind='proof_of_play' AND organization_id=$1
+       ORDER BY created_at DESC LIMIT $2`,
+      [orgId, Math.max(0, Math.floor(limit))],
+    );
+    return result.rows.map(row => row.payload);
   }
   async recordProofOfPlay(log: ProofOfPlayLog, orgId: string) {
     const result = await this.recordProofOfPlayAndReplay(log, orgId);
@@ -315,7 +345,12 @@ export class PostgresRepository implements VeloRepository {
       );
       if (!replay.rowCount) { await client.query('ROLLBACK'); return false; }
       const item = { ...log, organizationId: orgId };
-      if (!(await this.save('proof_of_play', item, orgId, client))) { await client.query('ROLLBACK'); return false; }
+      const inserted = await client.query(
+        `INSERT INTO repository_records(kind,id,organization_id,payload,created_at)
+         VALUES('proof_of_play',$1,$2,$3::jsonb,NOW()) ON CONFLICT(kind,id) DO NOTHING RETURNING id`,
+        [item.id, orgId, JSON.stringify(item)],
+      );
+      if (!inserted.rowCount) { await client.query('ROLLBACK'); return false; }
       const campaign = await this.byIdForUpdate<Campaign>('campaign', log.campaignId, orgId, client);
       const device = await this.byIdForUpdate<Device>('device', log.deviceId, orgId, client);
       if (!campaign || !device) {
@@ -360,9 +395,12 @@ export class PostgresRepository implements VeloRepository {
     return { valid: true };
   }
   async recordWebhook(record: WebhookRecord) {
+    const eventId = record.eventId.length <= 64
+      ? record.eventId
+      : crypto.createHash('sha256').update(record.eventId).digest('hex');
     const result = await this.pool.query(
       'INSERT INTO webhook_events(event_id,provider,status,payload,processed_at) VALUES($1,$2,$3,$4::jsonb,$5) ON CONFLICT(event_id) DO NOTHING RETURNING event_id',
-      [record.eventId, record.provider, 'processed', JSON.stringify({ payloadHash: record.payloadHash }), record.processedAt],
+      [eventId, record.provider, 'processed', JSON.stringify({ payloadHash: record.payloadHash }), record.processedAt],
     );
     return Boolean(result.rowCount);
   }
@@ -372,19 +410,77 @@ export class PostgresRepository implements VeloRepository {
       VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [token.token, token.organizationId, token.driverId || null, token.screenPosition, token.hardwareOwnership, token.expiresAt, token.used, token.createdAt]);
   }
   async getPairingToken(token: string) {
-    const result = await this.pool.query<PairingTokenRecord & { organization_id: string; driver_id: string; screen_position: PairingTokenRecord['screenPosition']; hardware_ownership: PairingTokenRecord['hardwareOwnership']; expires_at: string; created_at: string }>(
+    const result = await this.pool.query<PairingTokenRecord & { expiresAt: number | string }>(
       `SELECT token,organization_id AS "organizationId",driver_id AS "driverId",screen_position AS "screenPosition",hardware_ownership AS "hardwareOwnership",expires_at AS "expiresAt",used,created_at AS "createdAt" FROM pairing_tokens WHERE token=$1 AND used=false AND expires_at>$2`,
       [token, Date.now()],
     );
-    return result.rows[0];
+    const row = result.rows[0];
+    return row ? { ...row, expiresAt: Number(row.expiresAt) } : undefined;
   }
   async consumePairingToken(token: string) {
-    const result = await this.pool.query<PairingTokenRecord>(
+    const result = await this.pool.query<PairingTokenRecord & { expiresAt: number | string }>(
       `UPDATE pairing_tokens SET used=true WHERE token=$1 AND used=false AND expires_at>$2
        RETURNING token,organization_id AS "organizationId",driver_id AS "driverId",screen_position AS "screenPosition",hardware_ownership AS "hardwareOwnership",expires_at AS "expiresAt",used,created_at AS "createdAt"`,
       [token, Date.now()],
     );
-    return result.rows[0];
+    const row = result.rows[0];
+    return row ? { ...row, expiresAt: Number(row.expiresAt) } : undefined;
+  }
+  async consumeAndProvisionDevice(
+    token: string,
+    device: Device,
+    credential: DeviceCredentialRecord,
+    audit?: Omit<AuditLog, 'id' | 'createdAt'>,
+  ) {
+    if (
+      device.id !== credential.deviceId ||
+      device.organizationId !== credential.organizationId
+    ) return false;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const consumed = await client.query<{ organization_id: string; driver_id: string | null }>(
+        `UPDATE pairing_tokens SET used=true
+         WHERE token=$1 AND used=false AND expires_at>$2
+         RETURNING organization_id,driver_id`,
+        [token, Date.now()],
+      );
+      const record = consumed.rows[0];
+      if (!record || record.organization_id !== device.organizationId) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      if ((record.driver_id || '') !== (device.driverId || '')) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      if (device.driverId && !(await this.byIdForUpdate<Driver>('driver', device.driverId, record.organization_id, client))) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      if (!(await this.save('device', device, record.organization_id, client))) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      await client.query(
+        `INSERT INTO device_credentials(device_id,organization_id,device_secret,revoked,created_at,last_seen_at)
+         VALUES($1,$2,$3,$4,$5,$6)`,
+        [credential.deviceId, credential.organizationId, credential.deviceSecret, credential.revoked, credential.createdAt, credential.lastSeenAt || null],
+      );
+      if (audit) {
+        const auditRecord: AuditLog = {
+          ...audit,
+          id: `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+          createdAt: new Date().toISOString(),
+        };
+        if (!(await this.save('audit', auditRecord, auditRecord.organizationId, client))) {
+          await client.query('ROLLBACK');
+          return false;
+        }
+      }
+      await client.query('COMMIT');
+      return true;
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   async markPairingTokenUsed(token: string) { await this.pool.query('UPDATE pairing_tokens SET used=true WHERE token=$1', [token]); }
   async createRemoteCommand(cmd: RemoteCommandRecord) {
@@ -408,7 +504,12 @@ export class PostgresRepository implements VeloRepository {
     await this.save('audit', item, item.organizationId);
   }
   async getAuditLogs(orgId: string, limit = 100) {
-    return (await this.list<AuditLog>('audit', orgId)).slice(0, Math.max(0, limit));
+    const result = await this.pool.query<StoredRow<AuditLog>>(
+      `SELECT payload FROM repository_records WHERE kind='audit' AND organization_id=$1
+       ORDER BY created_at DESC LIMIT $2`,
+      [orgId, Math.max(0, Math.floor(limit))],
+    );
+    return result.rows.map(row => row.payload);
   }
 
   async createSession(session: SessionRecord) {
@@ -421,7 +522,8 @@ export class PostgresRepository implements VeloRepository {
       'SELECT token,user_id AS "userId",user_email AS "userEmail",user_name AS "userName",role,organization_id AS "organizationId",expires_at AS "expiresAt",created_at AS "createdAt" FROM sessions WHERE token=$1 AND expires_at>$2',
       [token, Date.now()],
     );
-    return result.rows[0];
+    const row = result.rows[0];
+    return row ? { ...row, expiresAt: Number(row.expiresAt), createdAt: new Date(row.createdAt).toISOString() } : undefined;
   }
   async deleteSession(token: string) { const result = await this.pool.query('DELETE FROM sessions WHERE token=$1', [token]); return Boolean(result.rowCount); }
   async close() { await this.pool.end(); }
