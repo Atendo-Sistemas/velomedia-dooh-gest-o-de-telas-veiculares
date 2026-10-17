@@ -142,7 +142,7 @@ describe('VeloMedia Multi-Tenant Storage Isolation', () => {
     if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
   });
 
-  it('should bootstrap production storage with only the configured administrator', () => {
+  it('should prevent JSON storage from being initialized in production', () => {
     const previousEnv = {
       NODE_ENV: process.env.NODE_ENV,
       DATA_FILE_PATH: process.env.DATA_FILE_PATH,
@@ -157,19 +157,8 @@ describe('VeloMedia Multi-Tenant Storage Isolation', () => {
       process.env.INITIAL_ADMIN_PASSWORD = 'a-long-test-password';
       if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
 
-      const store = new VeloStorage();
-      expect(store.getUsers()).toHaveLength(1);
-      expect(store.getUsers()[0].email).toBe('owner@example.com');
-      expect(store.getUsers()[0].role).toBe('super_admin');
-      expect(store.getOrganizations()).toHaveLength(1);
-      expect(store.getDevices(store.getOrganizations()[0].id)).toEqual([]);
-      expect(fs.statSync(testDbPath).mode & 0o777).toBe(0o600);
-
-      process.env.INITIAL_ADMIN_PASSWORD = 'a-different-test-password';
-      const restartedStore = new VeloStorage();
-      const existingAdmin = restartedStore.getUserByEmail('owner@example.com');
-      expect(verifyPassword('a-long-test-password', existingAdmin!.passwordHash!)).toBe(true);
-      expect(verifyPassword('a-different-test-password', existingAdmin!.passwordHash!)).toBe(false);
+      expect(() => new VeloStorage()).toThrow('O armazenamento JSON VeloStorage só pode ser usado em desenvolvimento');
+      expect(fs.existsSync(testDbPath)).toBe(false);
     } finally {
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
@@ -179,33 +168,22 @@ describe('VeloMedia Multi-Tenant Storage Isolation', () => {
     }
   });
 
-  it('should create the configured super admin when existing production storage has none', () => {
+  it('should not bootstrap a production super admin into JSON storage', () => {
     const previousEnv = {
       NODE_ENV: process.env.NODE_ENV,
       DATA_FILE_PATH: process.env.DATA_FILE_PATH,
       INITIAL_ADMIN_EMAIL: process.env.INITIAL_ADMIN_EMAIL,
       INITIAL_ADMIN_PASSWORD: process.env.INITIAL_ADMIN_PASSWORD,
     };
-    const password = 'a-long-test-password';
-
     try {
       process.env.NODE_ENV = 'production';
       process.env.DATA_FILE_PATH = testDbPath;
       process.env.INITIAL_ADMIN_EMAIL = 'owner@example.com';
-      process.env.INITIAL_ADMIN_PASSWORD = password;
+      process.env.INITIAL_ADMIN_PASSWORD = 'a-long-test-password';
       if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
 
-      new VeloStorage();
-      const existingData = JSON.parse(fs.readFileSync(testDbPath, 'utf-8'));
-      existingData.users = [];
-      fs.writeFileSync(testDbPath, JSON.stringify(existingData), { mode: 0o600 });
-
-      const store = new VeloStorage();
-      const admin = store.getUserByEmail('owner@example.com');
-      expect(admin?.role).toBe('super_admin');
-      expect(admin?.passwordHash).toBeTruthy();
-      expect(verifyPassword(password, admin!.passwordHash!)).toBe(true);
-      expect(store.getOrganizations()).toHaveLength(1);
+      expect(() => new VeloStorage()).toThrow('O armazenamento JSON VeloStorage só pode ser usado em desenvolvimento');
+      expect(fs.existsSync(testDbPath)).toBe(false);
     } finally {
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];

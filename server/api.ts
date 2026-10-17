@@ -188,14 +188,18 @@ apiRouter.post('/auth/logout', async (req: Request, res: Response) => {
 apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Promise<void> => {
   const user = await repository.getUserById(req.user!.id);
   const org = await repository.getOrganizationById(req.user!.organizationId);
+  const safeUser = user
+    ? (({ passwordHash: _passwordHash, ...publicUser }) => publicUser)(user as SaaSUser & { passwordHash?: string })
+    : undefined;
 
   res.json({
     authenticated: true,
-    user,
+    user: user ? safeUser : undefined,
     organization: org,
   });
+});
 
-  apiRouter.post('/auth/change-password', requireAuth, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
+apiRouter.post('/auth/change-password', requireAuth, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
     const user = await repository.getUserByEmail(req.user!.email);
     if (!user?.passwordHash || !verifyPassword(req.body.currentPassword, user.passwordHash)) {
       return res.status(401).json({ error: 'invalid_password', message: 'A senha atual está incorreta.' });
@@ -216,11 +220,13 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
     res.json({ success: true, reauthenticationRequired: true });
   });
 
-  apiRouter.get('/users', requireAuth, requireRole(['super_admin']), async (_req: Request, res: Response) => {
-    res.json(await repository.getUsers());
-  });
+apiRouter.get('/users', requireAuth, requireRole(['super_admin']), async (_req: Request, res: Response) => {
+  const users = await repository.getUsers();
+  res.json(users.map(user => (({ passwordHash: _passwordHash, ...publicUser }) =>
+    publicUser)(user as SaaSUser & { passwordHash?: string })));
+});
 
-  apiRouter.post('/users', requireAuth, requireRole(['super_admin']), validateBody(CreateSaaSUserSchema), async (req: Request, res: Response) => {
+apiRouter.post('/users', requireAuth, requireRole(['super_admin']), validateBody(CreateSaaSUserSchema), async (req: Request, res: Response) => {
     const { password, ...user } = req.body as SaaSUser & { password: string };
     if (!await repository.getOrganizationById(user.organizationId)) {
       return res.status(400).json({ error: 'invalid_organization', message: 'A organização selecionada não existe.' });
@@ -242,7 +248,7 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
     res.status(201).json(user);
   });
 
-  apiRouter.put('/users/:id', requireAuth, requireRole(['super_admin']), validateBody(UpdateSaaSUserSchema), async (req: Request, res: Response) => {
+apiRouter.put('/users/:id', requireAuth, requireRole(['super_admin']), validateBody(UpdateSaaSUserSchema), async (req: Request, res: Response) => {
     const user = req.body as SaaSUser & { password?: string };
     if (req.params.id !== user.id) {
       return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID do usuário.' });
@@ -272,7 +278,7 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
     res.json(safeUser);
   });
 
-  apiRouter.delete('/users/:id', requireAuth, requireRole(['super_admin']), async (req: Request, res: Response) => {
+apiRouter.delete('/users/:id', requireAuth, requireRole(['super_admin']), async (req: Request, res: Response) => {
     const user = await repository.getUserById(req.params.id);
     if (!user) return res.status(404).json({ error: 'not_found', message: 'Usuário não encontrado.' });
     if (user.id === req.user!.id) {
@@ -297,7 +303,6 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
       ipAddress: req.ip,
     });
     res.json({ success: true });
-  });
 });
 
 // ============================================================================
