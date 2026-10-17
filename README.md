@@ -22,6 +22,8 @@ A API mantém o formato atual dos objetos de domínio como registros JSONB em `r
 A cobrança de faturas de organizações via PIX está integrada ao Asaas. Os repasses a motoristas e as cobranças de anunciantes não estão integrados; a API não deve marcar essas operações como pagas.
 O player público por QR Code carrega dados de campanhas próprios para exibição sem uma sessão administrativa. O envio de registros de exibição (Proof of Play) ainda exige uma credencial de dispositivo provisionada e uma requisição assinada; a inicialização pública do quiosque não expõe nem cria essa credencial.
 
+Planos, usuários, motoristas, organizações, anunciantes e logs de auditoria são gerenciados pela API e persistidos no repositório configurado. O painel de superusuário permite criar e editar planos e usuários, consultar logs globais e alterar a própria senha; as operações administrativas são restritas por função. A contratação de plano cria uma fatura PIX e a ativação ocorre após confirmação do pagamento pelo webhook Asaas. Os registros dos usuários e dos logs também são gravados no PostgreSQL em produção.
+
 ### Docker Compose
 
 1. Instale o Docker Engine com Compose e o Caddy. Coloque o repositório em `/opt/velomedia`:

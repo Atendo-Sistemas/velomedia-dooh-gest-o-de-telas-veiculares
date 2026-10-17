@@ -489,7 +489,7 @@ export class VeloStorage {
           currentFps: 60,
           brightness: 85,
           volume: 40,
-          appVersion: '2.5.0-beta.4',
+          appVersion: '2.5.0-beta.5',
           lastHeartbeat: new Date().toISOString(),
           kioskLocked: true,
           screenUptimeTodayHours: 8.5,
@@ -861,13 +861,13 @@ export class VeloStorage {
       this.save();
       return true;
     }
-
-    public deleteSessionsForUser(userId: string): void {
-      const before = this.memoryDb.sessions.length;
-      this.memoryDb.sessions = this.memoryDb.sessions.filter(session => session.userId !== userId);
-      if (this.memoryDb.sessions.length !== before) this.save();
-    }
     return false;
+  }
+
+  public deleteSessionsForUser(userId: string): void {
+    const before = this.memoryDb.sessions.length;
+    this.memoryDb.sessions = this.memoryDb.sessions.filter(session => session.userId !== userId);
+    if (this.memoryDb.sessions.length !== before) this.save();
   }
 
   // --- DRIVERS (STRICT MULTI-TENANT ISOLATION) ---
