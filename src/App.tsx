@@ -641,11 +641,6 @@ export default function App() {
     apiClient.updateDevice(updated).catch(console.error);
   };
 
-  // Driver PIX payment
-  const handlePayDriverPix = (driverId: string) => {
-    return apiClient.payoutDriverPix(driverId);
-  };
-
   const activeDeviceForPlayer = devices.find((d) => d.id === activePlayerDeviceId) || devices[0];
   const playerDevice = isKioskMode ? kioskDevice : activeDeviceForPlayer;
   const onlineCount = devices.filter((d) => d.status === 'online').length;
@@ -874,7 +869,6 @@ export default function App() {
             {activeTab === 'drivers' && (
               <DriversManager
                 drivers={drivers}
-                onPayDriverPix={handlePayDriverPix}
                 onManageDrivers={() => {
                   setRegistrationTab('drivers');
                   setActiveTab('registrations');

@@ -168,7 +168,11 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
     event.preventDefault();
     const id = editingPlan?.id || planName.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-    if (!id || (!editingPlan && plans.some(plan => plan.id === id))) {
+    if (!id) {
+      setPlanError('Informe um nome válido para o plano.');
+      return;
+    }
+    if (!editingPlan && plans.some(plan => plan.id === id)) {
       setPlanError('Já existe um plano com esse nome. Escolha outro nome.');
       return;
     }

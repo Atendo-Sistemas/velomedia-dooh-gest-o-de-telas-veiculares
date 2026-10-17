@@ -1187,11 +1187,21 @@ export class VeloStorage {
     );
     if (!advertiser) return false;
 
-    advertiser.prepaidBalance = Number(((advertiser.prepaidBalance || 0) + invoice.amount).toFixed(2));
-    invoice.status = 'paid';
-    invoice.paidAt = paidAt;
-    this.save();
-    return true;
+    const previousBalance = advertiser.prepaidBalance;
+    const previousStatus = invoice.status;
+    const previousPaidAt = invoice.paidAt;
+    try {
+      advertiser.prepaidBalance = Number(((advertiser.prepaidBalance || 0) + invoice.amount).toFixed(2));
+      invoice.status = 'paid';
+      invoice.paidAt = paidAt;
+      this.save();
+      return true;
+    } catch (error) {
+      advertiser.prepaidBalance = previousBalance;
+      invoice.status = previousStatus;
+      invoice.paidAt = previousPaidAt;
+      throw error;
+    }
   }
 
   public confirmPlanInvoicePayment(invoiceId: string, orgId: string, paidAt: string): boolean {
@@ -1204,15 +1214,31 @@ export class VeloStorage {
     const plan = this.memoryDb.plans.find(item => item.id === invoice.planTier);
     if (!organization || !plan) return false;
 
-    organization.planTier = plan.id;
-    organization.maxScreensLimit = plan.maxScreens;
-    organization.maxCampaignsLimit = plan.maxCampaigns;
-    organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
-    organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
-    invoice.status = 'paid';
-    invoice.paidAt = paidAt;
-    this.save();
-    return true;
+    const previousOrganization = {
+      planTier: organization.planTier,
+      maxScreensLimit: organization.maxScreensLimit,
+      maxCampaignsLimit: organization.maxCampaignsLimit,
+      monthlySoftwareCost: organization.monthlySoftwareCost,
+      netProfit: organization.netProfit,
+    };
+    const previousStatus = invoice.status;
+    const previousPaidAt = invoice.paidAt;
+    try {
+      organization.planTier = plan.id;
+      organization.maxScreensLimit = plan.maxScreens;
+      organization.maxCampaignsLimit = plan.maxCampaigns;
+      organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+      organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
+      invoice.status = 'paid';
+      invoice.paidAt = paidAt;
+      this.save();
+      return true;
+    } catch (error) {
+      Object.assign(organization, previousOrganization);
+      invoice.status = previousStatus;
+      invoice.paidAt = previousPaidAt;
+      throw error;
+    }
   }
 
   // --- PROOF OF PLAY LOGS (STRICT MULTI-TENANT ISOLATION) ---

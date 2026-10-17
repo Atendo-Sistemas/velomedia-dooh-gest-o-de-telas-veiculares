@@ -1288,7 +1288,7 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
     return res.status(400).json({ error: 'plan_screen_limit', message: 'O plano selecionado não comporta a quantidade atual de telas.' });
   }
   const existingPlanInvoice = (await repository.getInvoices(tenantId)).find(existing =>
-    existing.planTier === plan.id && existing.status !== 'paid',
+    existing.purpose === 'saas_plan' && !existing.advertiserId && existing.planTier === plan.id && existing.status !== 'paid',
   );
   if (existingPlanInvoice) return res.json(existingPlanInvoice);
 
@@ -1430,9 +1430,6 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
       for (const organization of organizations) {
         const invoice = await repository.getInvoiceById(invoiceId, organization.id);
         if (invoice && invoice.txid === payment.id) {
-          if (!Number.isFinite(Number(payment.value)) || Number(payment.value) !== invoice.amount) {
-            return res.status(409).json({ error: 'payment_amount_mismatch' });
-          }
           matchingInvoices.push({ invoice, organizationId: organization.id });
         }
       }
@@ -1441,6 +1438,16 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
       }
       const match = matchingInvoices[0];
       if (match) {
+        if (!Number.isFinite(Number(payment.value)) || Number(Number(payment.value).toFixed(2)) !== Number(match.invoice.amount.toFixed(2))) {
+          await repository.logAudit({
+            organizationId: match.organizationId,
+            action: 'PAYMENT_AMOUNT_MISMATCH',
+            resource: 'invoices',
+            resourceId: match.invoice.id,
+            details: { provider: 'asaas', txid: payment.id, expectedAmount: match.invoice.amount, receivedAmount: payment.value },
+          });
+          return res.status(409).json({ error: 'payment_amount_mismatch' });
+        }
         if (paidEvents.has(event.event) && match.invoice.status !== 'paid') {
           const paidAt = payment.paymentDate || payment.clientPaymentDate || new Date().toISOString();
           if (match.invoice.advertiserId) {

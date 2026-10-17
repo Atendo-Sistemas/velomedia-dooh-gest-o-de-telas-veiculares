@@ -3,11 +3,9 @@ import {
   Users, 
   Car, 
   DollarSign, 
-  CheckCircle2, 
   Clock, 
   Award, 
   Phone, 
-  Send, 
   Search, 
   Sparkles,
   TrendingUp,
@@ -35,23 +33,17 @@ import { INITIAL_REFERRALS } from '../data/mockData';
 
 interface DriversManagerProps {
   drivers: Driver[];
-  onPayDriverPix: (driverId: string) => Promise<{ success: boolean; paidAmount: number }>;
   onManageDrivers: () => void;
 }
 
 export const DriversManager: React.FC<DriversManagerProps> = ({
   drivers,
-  onPayDriverPix,
   onManageDrivers,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'drivers_list' | 'byod_contracts' | 'referral_network' | 'simulator'>('drivers_list');
   const [searchTerm, setSearchTerm] = useState('');
   const [contractFilter, setContractFilter] = useState<'all' | 'byod' | 'company'>('all');
-  const [paidDrivers, setPaidDrivers] = useState<string[]>([]);
-  const [processingDriverId, setProcessingDriverId] = useState<string | null>(null);
-  const [payoutError, setPayoutError] = useState<string | null>(null);
   const referrals = INITIAL_REFERRALS;
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   // Referral Simulator State
@@ -75,24 +67,6 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
 
     return matchesSearch && matchesContract;
   });
-
-  const handlePixPayment = async (driver: Driver) => {
-    if (processingDriverId) return;
-    setProcessingDriverId(driver.id);
-    setPayoutError(null);
-    try {
-      const result = await onPayDriverPix(driver.id);
-      if (!result.success) throw new Error('O repasse PIX não foi confirmado pelo provedor.');
-      setPaidDrivers(current => [...new Set([...current, driver.id])]);
-      confetti({ particleCount: 40, spread: 60, origin: { y: 0.8 } });
-      setToastMessage(`Repasse PIX de R$ ${result.paidAmount.toFixed(2)} confirmado para ${driver.name}.`);
-      setTimeout(() => setToastMessage(null), 4000);
-    } catch (error) {
-      setPayoutError(error instanceof Error ? error.message : 'Não foi possível confirmar o repasse PIX.');
-    } finally {
-      setProcessingDriverId(null);
-    }
-  };
 
   const handleCopyReferralCode = (code: string) => {
     navigator.clipboard.writeText(`https://velomedia.com.br/parceiro?ref=${code}`);
@@ -146,21 +120,6 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
           </button>
         </div>
       </div>
-
-      {toastMessage && (
-        <div className="p-3.5 bg-emerald-950/90 border border-emerald-500/50 rounded-xl text-emerald-300 text-xs flex items-center justify-between animate-fadeIn shadow-lg">
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-            <span className="font-medium">{toastMessage}</span>
-          </div>
-          <span className="font-mono text-[10px] bg-emerald-900/80 px-2 py-0.5 rounded font-bold">PIX PROCESSADO</span>
-        </div>
-      )}
-      {payoutError && (
-        <div className="rounded-xl border border-rose-500/40 bg-rose-950/70 p-3.5 text-xs text-rose-200" role="alert">
-          Repasse não efetuado: {payoutError}
-        </div>
-      )}
 
       {/* Program Summary Cards (4 KPI blocks) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -315,7 +274,6 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
           {/* Driver Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredDrivers.map((driver) => {
-              const isPaid = paidDrivers.includes(driver.id);
               const recurringBonus = driver.referralRecurringBonusMonthly || 0;
               const totalPayout = driver.monthlyEarnings + recurringBonus;
               const isByod = driver.contractType === 'byod_driver_equipment';
@@ -475,25 +433,12 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
                     </div>
 
                     <button
-                      onClick={() => void handlePixPayment(driver)}
-                      disabled={isPaid || processingDriverId !== null}
-                      className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition shadow-md ${
-                        isPaid
-                          ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/40 cursor-default'
-                          : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white'
-                      }`}
+                      disabled
+                      title="O provedor de repasses a motoristas ainda não está integrado."
+                      className="w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 border border-amber-500/30 bg-amber-950/30 text-amber-200 cursor-not-allowed"
                     >
-                      {isPaid ? (
-                        <>
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          <span>Repasse PIX Efetuado</span>
-                        </>
-                      ) : (
-                        <>
-                          <Send className="w-4 h-4" />
-                          <span>{processingDriverId === driver.id ? 'Processando repasse…' : 'Pagar Repasse + Bônus via PIX'}</span>
-                        </>
-                      )}
+                      <Clock className="w-4 h-4" />
+                      <span>Repasse PIX indisponível: provedor não configurado</span>
                     </button>
                   </div>
                 </div>
@@ -694,6 +639,9 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
       {/* ========================================================================= */}
       {activeSubTab === 'referral_network' && (
         <div className="space-y-4">
+          <p role="note" className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-3 text-xs text-amber-200">
+            Demonstração: os dados da rede de indicações ainda não são persistidos nem vinculados a pagamentos.
+          </p>
           
           <div className="bg-gradient-to-r from-purple-950/60 via-slate-900 to-slate-900 border border-purple-500/30 p-5 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="space-y-1">
