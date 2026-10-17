@@ -199,7 +199,7 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
   });
 });
 
-apiRouter.post('/auth/change-password', requireAuth, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
+apiRouter.post('/auth/change-password', requireAuth, adminRequestRateLimiter, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
     const user = await repository.getUserByEmail(req.user!.email);
     if (!user?.passwordHash || !verifyPassword(req.body.currentPassword, user.passwordHash)) {
       return res.status(401).json({ error: 'invalid_password', message: 'A senha atual está incorreta.' });
@@ -226,7 +226,7 @@ apiRouter.get('/users', requireAuth, requireRole(['super_admin']), async (_req: 
     publicUser)(user as SaaSUser & { passwordHash?: string })));
 });
 
-apiRouter.post('/users', requireAuth, requireRole(['super_admin']), validateBody(CreateSaaSUserSchema), async (req: Request, res: Response) => {
+apiRouter.post('/users', requireAuth, adminRequestRateLimiter, requireRole(['super_admin']), validateBody(CreateSaaSUserSchema), async (req: Request, res: Response) => {
     const { password, ...user } = req.body as SaaSUser & { password: string };
     if (!await repository.getOrganizationById(user.organizationId)) {
       return res.status(400).json({ error: 'invalid_organization', message: 'A organização selecionada não existe.' });
@@ -248,7 +248,7 @@ apiRouter.post('/users', requireAuth, requireRole(['super_admin']), validateBody
     res.status(201).json(user);
   });
 
-apiRouter.put('/users/:id', requireAuth, requireRole(['super_admin']), validateBody(UpdateSaaSUserSchema), async (req: Request, res: Response) => {
+apiRouter.put('/users/:id', requireAuth, adminRequestRateLimiter, requireRole(['super_admin']), validateBody(UpdateSaaSUserSchema), async (req: Request, res: Response) => {
     const user = req.body as SaaSUser & { password?: string };
     if (req.params.id !== user.id) {
       return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID do usuário.' });
@@ -278,7 +278,7 @@ apiRouter.put('/users/:id', requireAuth, requireRole(['super_admin']), validateB
     res.json(safeUser);
   });
 
-apiRouter.delete('/users/:id', requireAuth, requireRole(['super_admin']), async (req: Request, res: Response) => {
+apiRouter.delete('/users/:id', requireAuth, adminRequestRateLimiter, requireRole(['super_admin']), async (req: Request, res: Response) => {
     const user = await repository.getUserById(req.params.id);
     if (!user) return res.status(404).json({ error: 'not_found', message: 'Usuário não encontrado.' });
     if (user.id === req.user!.id) {
@@ -312,7 +312,7 @@ apiRouter.get('/plans', requireAuth, async (_req: Request, res: Response) => {
   res.json(await repository.getPlans());
 });
 
-apiRouter.post('/plans', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(SaaSPlanSchema), async (req: Request, res: Response) => {
+apiRouter.post('/plans', requireAuth, adminRequestRateLimiter, requireRole(['platform_admin', 'super_admin']), validateBody(SaaSPlanSchema), async (req: Request, res: Response) => {
   if (await repository.getPlanById(req.body.id)) {
     return res.status(409).json({ error: 'plan_exists', message: 'Já existe um plano com este identificador.' });
   }
@@ -331,7 +331,7 @@ apiRouter.post('/plans', requireAuth, requireRole(['platform_admin', 'super_admi
   res.status(201).json(saved);
 });
 
-apiRouter.put('/plans/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(SaaSPlanSchema), async (req: Request, res: Response) => {
+apiRouter.put('/plans/:id', requireAuth, adminRequestRateLimiter, requireRole(['platform_admin', 'super_admin']), validateBody(SaaSPlanSchema), async (req: Request, res: Response) => {
   if (req.params.id !== req.body.id) {
     return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID do plano.' });
   }
@@ -353,7 +353,7 @@ apiRouter.put('/plans/:id', requireAuth, requireRole(['platform_admin', 'super_a
   res.json(saved);
 });
 
-apiRouter.delete('/plans/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
+apiRouter.delete('/plans/:id', requireAuth, adminRequestRateLimiter, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
   const plans = await repository.getPlans();
   if (plans.length <= 1) {
     return res.status(409).json({ error: 'last_plan', message: 'O sistema precisa manter ao menos um plano.' });
