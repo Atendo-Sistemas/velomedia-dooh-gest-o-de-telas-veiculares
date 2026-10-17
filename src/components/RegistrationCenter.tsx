@@ -2733,7 +2733,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
                     className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:border-indigo-500"
                   >
                     <option value="">Selecione um anunciante</option>
-                    {advertisers.filter(advertiser => !advertiser.organizationId || advertiser.organizationId === userOrgId).map(advertiser => (
+                    {advertisers.filter(advertiser => advertiser.organizationId === userOrgId).map(advertiser => (
                       <option key={advertiser.id} value={advertiser.id}>{advertiser.companyName}</option>
                     ))}
                   </select>

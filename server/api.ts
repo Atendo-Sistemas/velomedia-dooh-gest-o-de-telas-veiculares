@@ -71,6 +71,27 @@ for (const method of routeMethods) {
   ));
 }
 
+function buildAdvertiserRechargeInvoice(advertiser: AdvertiserAccount, organizationId: string, amount: number): SaaSInvoice {
+  const issuedAt = new Date();
+  const issueDate = issuedAt.toISOString().slice(0, 10);
+  const id = randomUUID();
+  return {
+    id: `adv_inv_${id}`,
+    invoiceNumber: `ADV-${issueDate.replaceAll('-', '')}-${id.slice(0, 8).toUpperCase()}`,
+    organizationId,
+    organizationName: advertiser.companyName,
+    advertiserId: advertiser.id,
+    purpose: 'advertiser_recharge',
+    issueDate,
+    dueDate: new Date(issuedAt.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    month: issueDate.slice(0, 7),
+    amount,
+    status: 'pending',
+    screensBilled: 0,
+    paymentMethod: 'pix',
+  };
+}
+
 // ============================================================================
 // 1. HEALTH & METRICS
 // ============================================================================
@@ -1079,23 +1100,7 @@ apiRouter.post('/advertiser-portal/invoices', requireAuth, adminRequestRateLimit
   if (!advertiser || advertiser.status !== 'active') {
     return res.status(404).json({ error: 'advertiser_not_found', message: 'Conta de anunciante não encontrada ou inativa.' });
   }
-  const issuedAt = new Date();
-  const issueDate = issuedAt.toISOString().slice(0, 10);
-  const invoice: SaaSInvoice = {
-    id: `adv_inv_${randomUUID()}`,
-    invoiceNumber: `ADV-${issueDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
-    organizationId: tenantId,
-    organizationName: advertiser.companyName,
-    advertiserId: advertiser.id,
-    purpose: 'advertiser_recharge',
-    issueDate,
-    dueDate: new Date(issuedAt.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    month: issueDate.slice(0, 7),
-    amount: req.body.amount,
-    status: 'pending',
-    screensBilled: 0,
-    paymentMethod: 'pix',
-  };
+  const invoice = buildAdvertiserRechargeInvoice(advertiser, tenantId, req.body.amount);
   const saved = await repository.saveInvoice(invoice, tenantId);
   if (!saved) return res.status(409).json({ error: 'invoice_conflict', message: 'Não foi possível registrar a fatura.' });
   await repository.logAudit({
@@ -1117,8 +1122,20 @@ apiRouter.post('/advertiser-portal/invoices/:id/charge-pix', requireAuth, adminR
   if (!invoice || invoice.advertiserId !== req.user!.advertiserId) {
     return res.status(404).json({ error: 'not_found', message: 'Cobrança não encontrada.' });
   }
+  if (invoice.purpose !== 'advertiser_recharge') {
+    return res.status(400).json({ error: 'invalid_invoice_purpose', message: 'Esta fatura não é uma recarga de anunciante.' });
+  }
   if (invoice.status === 'paid') {
     return res.status(409).json({ error: 'invoice_already_paid', message: 'Esta cobrança já foi paga.' });
+  }
+  if (invoice.txid && invoice.pixQrCode && invoice.pixQrCodeExpiresAt && Date.parse(invoice.pixQrCodeExpiresAt) > Date.now()) {
+    return res.json({
+      success: true,
+      txid: invoice.txid,
+      copiaECola: invoice.pixQrCode,
+      qrCodeUrl: invoice.pixQrCodeUrl || '',
+      expiresAt: invoice.pixQrCodeExpiresAt,
+    });
   }
   const advertiser = await repository.getAdvertiserById(req.user!.advertiserId!, tenantId);
   if (!advertiser || advertiser.status !== 'active') {
@@ -1153,7 +1170,7 @@ apiRouter.post('/advertiser-portal/invoices/:id/charge-pix', requireAuth, adminR
 
 apiRouter.get('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
-  res.json(await repository.getAdvertisers(tenantId));
+  res.json((await repository.getAdvertisers(tenantId)).map(advertiser => ({ ...advertiser, organizationId: tenantId })));
 });
 
 apiRouter.post('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), validateBody(AdvertiserSchema), async (req: Request, res: Response) => {
@@ -1222,25 +1239,7 @@ apiRouter.post('/advertisers/:id/invoices', requireAuth, adminRequestRateLimiter
     return res.status(409).json({ error: 'advertiser_inactive', message: 'Somente anunciantes ativos podem receber cobranças.' });
   }
 
-  const issuedAt = new Date();
-  const issueDate = issuedAt.toISOString().slice(0, 10);
-  const dueDate = new Date(issuedAt.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const id = `adv_inv_${randomUUID()}`;
-  const invoice: SaaSInvoice = {
-    id,
-    invoiceNumber: `ADV-${issueDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
-    organizationId: tenantId,
-    organizationName: advertiser.companyName,
-    advertiserId: advertiser.id,
-    purpose: 'advertiser_recharge',
-    issueDate,
-    dueDate,
-    month: issueDate.slice(0, 7),
-    amount: req.body.amount,
-    status: 'pending',
-    screensBilled: 0,
-    paymentMethod: 'pix',
-  };
+  const invoice = buildAdvertiserRechargeInvoice(advertiser, tenantId, req.body.amount);
   const saved = await repository.saveInvoice(invoice, tenantId);
   if (!saved) return res.status(409).json({ error: 'invoice_conflict', message: 'Não foi possível registrar a fatura do anunciante.' });
   await repository.logAudit({
@@ -1276,28 +1275,26 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
   if (await repository.getInvoiceById(invoice.id, tenantId)) {
     return res.status(409).json({ error: 'invoice_exists', message: 'Já existe uma fatura com este identificador.' });
   }
-  if (invoice.planTier) {
-    invoice.purpose = 'saas_plan';
-    const organization = await repository.getOrganizationById(tenantId);
-    const plan = await repository.getPlanById(invoice.planTier);
-    if (!organization || !plan) {
-      return res.status(400).json({ error: 'invalid_plan', message: 'O plano selecionado não está disponível.' });
-    }
-    if (organization.planTier === plan.id) {
-      return res.status(409).json({ error: 'plan_already_active', message: 'Este plano já está ativo na organização.' });
-    }
-    if (plan.maxScreens < organization.activeScreensCount) {
-      return res.status(400).json({ error: 'plan_screen_limit', message: 'O plano selecionado não comporta a quantidade atual de telas.' });
-    }
-    const existingPlanInvoice = (await repository.getInvoices(tenantId)).find(existing =>
-      existing.planTier === plan.id && existing.status !== 'paid',
-    );
-    if (existingPlanInvoice) return res.json(existingPlanInvoice);
-
-    invoice.amount = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
-    invoice.screensBilled = organization.activeScreensCount;
-    invoice.organizationName = organization.name;
+  invoice.purpose = 'saas_plan';
+  const organization = await repository.getOrganizationById(tenantId);
+  const plan = await repository.getPlanById(invoice.planTier);
+  if (!organization || !plan) {
+    return res.status(400).json({ error: 'invalid_plan', message: 'O plano selecionado não está disponível.' });
   }
+  if (organization.planTier === plan.id) {
+    return res.status(409).json({ error: 'plan_already_active', message: 'Este plano já está ativo na organização.' });
+  }
+  if (plan.maxScreens < organization.activeScreensCount) {
+    return res.status(400).json({ error: 'plan_screen_limit', message: 'O plano selecionado não comporta a quantidade atual de telas.' });
+  }
+  const existingPlanInvoice = (await repository.getInvoices(tenantId)).find(existing =>
+    existing.planTier === plan.id && existing.status !== 'paid',
+  );
+  if (existingPlanInvoice) return res.json(existingPlanInvoice);
+
+  invoice.amount = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+  invoice.screensBilled = organization.activeScreensCount;
+  invoice.organizationName = organization.name;
   invoice.txid = undefined;
   invoice.pixQrCode = undefined;
   invoice.pixQrCodeUrl = undefined;
@@ -1330,8 +1327,20 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_a
   if (!invoice) {
     return res.status(404).json({ error: 'not_found', message: 'Fatura não encontrada.' });
   }
+  if (Boolean(invoice.advertiserId) !== (invoice.purpose === 'advertiser_recharge')) {
+    return res.status(400).json({ error: 'invalid_invoice_purpose', message: 'A fatura não corresponde ao tipo de cobrança.' });
+  }
   if (invoice.status === 'paid') {
     return res.status(409).json({ error: 'invoice_already_paid', message: 'Esta fatura já foi paga.' });
+  }
+  if (invoice.txid && invoice.pixQrCode && invoice.pixQrCodeExpiresAt && Date.parse(invoice.pixQrCodeExpiresAt) > Date.now()) {
+    return res.json({
+      success: true,
+      txid: invoice.txid,
+      copiaECola: invoice.pixQrCode,
+      qrCodeUrl: invoice.pixQrCodeUrl || '',
+      expiresAt: invoice.pixQrCodeExpiresAt,
+    });
   }
   const advertiser = invoice.advertiserId
     ? await repository.getAdvertiserById(invoice.advertiserId, tenantId)
@@ -1493,7 +1502,7 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
 // ============================================================================
 // 12. AUDIT LOGS
 // ============================================================================
-apiRouter.get('/audit-logs', requireAuth, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
+apiRouter.get('/audit-logs', requireAuth, requireRole(['super_admin']), async (req: Request, res: Response) => {
   const limit = Math.max(1, Math.min(parseInt(req.query.limit as string, 10) || 100, 1000));
   res.json(await repository.getAllAuditLogs(limit));
 });

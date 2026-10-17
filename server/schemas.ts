@@ -344,7 +344,7 @@ export const InvoiceSchema = z.object({
   month: z.string().optional(),
   issueDate: z.string(),
   dueDate: z.string(),
-  amount: z.number().nonnegative(),
+  amount: z.number().nonnegative().optional(),
   status: z.enum(['paid', 'pending', 'overdue']),
   screensBilled: z.number().nonnegative(),
   devicesBilled: z.number().nonnegative().optional(),

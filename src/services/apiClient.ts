@@ -286,7 +286,7 @@ export const apiClient = {
   async getInvoices(): Promise<SaaSInvoice[]> {
     return request<SaaSInvoice[]>('/invoices');
   },
-  async createInvoice(invoice: SaaSInvoice): Promise<SaaSInvoice> {
+  async createInvoice(invoice: Omit<SaaSInvoice, 'amount'> & { amount?: number }): Promise<SaaSInvoice> {
     return request<SaaSInvoice>('/invoices', { method: 'POST', body: JSON.stringify(invoice) });
   },
   async createAdvertiserInvoice(advertiserId: string, amount: number): Promise<SaaSInvoice> {

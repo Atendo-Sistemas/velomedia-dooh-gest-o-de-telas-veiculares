@@ -47,7 +47,7 @@ export const AdvertiserPortal: React.FC<AdvertiserPortalProps> = ({ onLogout }) 
     setNotice('');
     try {
       const invoice = await apiClient.createAdvertiserPortalInvoice(rechargeAmount);
-      setInvoices(current => [invoice, ...current]);
+      setInvoices(current => [invoice, ...current.filter(existing => existing.id !== invoice.id)]);
       setNotice('Cobrança criada. Gere o PIX para concluir o pagamento.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível criar a cobrança.');
@@ -80,7 +80,7 @@ export const AdvertiserPortal: React.FC<AdvertiserPortalProps> = ({ onLogout }) 
     }
   };
 
-  const prepaidBalance = advertiser?.prepaidBalance ?? advertiser?.currentBalance ?? advertiser?.balance ?? 0;
+  const prepaidBalance = advertiser?.prepaidBalance ?? 0;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">

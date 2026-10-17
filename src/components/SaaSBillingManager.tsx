@@ -131,7 +131,6 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
         month: issueDate.slice(0, 7),
         issueDate,
         dueDate,
-        amount: 0,
         status: 'pending',
         screensBilled: currentOrg.activeScreensCount,
         paymentMethod: 'pix',
@@ -404,21 +403,29 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {advertisers.map(advertiser => (
+          {advertiserAccounts.map(advertiser => (
             <article key={advertiser.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-bold text-white">{advertiser.companyName}</h3>
                   <p className="mt-1 text-[11px] text-slate-400">{advertiser.contactName} · {advertiser.email}</p>
                 </div>
-                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">{advertiser.status}</span>
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                  advertiser.status === 'active'
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                    : advertiser.status === 'blocked'
+                      ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+                      : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                }`}>
+                  {advertiser.status === 'active' ? 'Ativo' : advertiser.status === 'blocked' ? 'Bloqueado' : 'Aguardando validação'}
+                </span>
               </div>
               <p className="mt-3 text-xs text-slate-400">{advertiser.activeCampaignsCount} campanhas · Saldo R$ {advertiser.currentBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-              <p className="mt-1 text-xs text-emerald-300">Crédito pré-pago: R$ {(advertiserAccounts.find(item => item.id === advertiser.id)?.prepaidBalance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+              <p className="mt-1 text-xs text-emerald-300">Crédito pré-pago: R$ {(advertiser.prepaidBalance ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
               <p className="mt-2 font-mono text-[10px] text-indigo-300">Portal: {advertiser.portalAccessCode}</p>
             </article>
           ))}
-          {advertisers.length === 0 && <p className="text-xs text-slate-400">Nenhum cliente cadastrado para esta organização.</p>}
+          {advertiserAccounts.length === 0 && <p className="text-xs text-slate-400">Nenhum cliente cadastrado para esta organização.</p>}
         </div>
       </div>
 
