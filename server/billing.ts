@@ -25,6 +25,7 @@ export interface PaymentGatewayConfig {
 export class VeloPixGatewayAdapter {
   private config: PaymentGatewayConfig;
   private repository = getVeloRepository();
+  private inFlightCharges = new Map<string, Promise<PixChargeResult>>();
 
   constructor() {
     const provider = (process.env.PIX_GATEWAY_PROVIDER as PaymentGatewayConfig['provider']) || 'efi_bank';
@@ -109,7 +110,29 @@ export class VeloPixGatewayAdapter {
    * Creates a PIX charge.
    * If the real payment provider is not configured, explicitly returns payment_provider_not_configured.
    */
-  public async createPixCharge(params: {
+  public createPixCharge(params: {
+    invoiceId: string;
+    organizationId: string;
+    customerReference?: string;
+    amount: number;
+    organizationName: string;
+    description: string;
+    dueDate: string;
+    cnpj: string;
+    email: string;
+    phone: string;
+  }): Promise<PixChargeResult> {
+    const key = `${params.organizationId}:${params.invoiceId}`;
+    const existing = this.inFlightCharges.get(key);
+    if (existing) return existing;
+    const charge = this.createPixChargeOnce(params);
+    this.inFlightCharges.set(key, charge);
+    return charge.finally(() => {
+      if (this.inFlightCharges.get(key) === charge) this.inFlightCharges.delete(key);
+    });
+  }
+
+  private async createPixChargeOnce(params: {
     invoiceId: string;
     organizationId: string;
     customerReference?: string;

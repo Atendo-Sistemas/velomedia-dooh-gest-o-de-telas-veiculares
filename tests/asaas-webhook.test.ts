@@ -59,6 +59,22 @@ describe('Asaas payment webhooks', () => {
       prepaidBalance: 12.5,
     };
     store.saveAdvertiser(advertiser, organization.id);
+    const otherAdvertiser = { ...advertiser, id: 'advertiser-webhook-other', companyName: 'Other Advertiser' };
+    store.saveAdvertiser(otherAdvertiser, organization.id);
+    store.saveInvoice({
+      id: 'invoice-other-advertiser',
+      invoiceNumber: 'ADV-OTHER-1',
+      organizationId: organization.id,
+      organizationName: otherAdvertiser.companyName,
+      advertiserId: otherAdvertiser.id,
+      purpose: 'advertiser_recharge',
+      issueDate: '2026-10-16',
+      dueDate: '2026-10-30',
+      amount: 200,
+      status: 'pending',
+      screensBilled: 0,
+      paymentMethod: 'pix',
+    }, organization.id);
     const { apiRouter } = await import('../server/api');
     const originalFetch = globalThis.fetch;
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -92,13 +108,22 @@ describe('Asaas payment webhooks', () => {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
-      req.user = {
-        id: 'user_master',
-        email: 'admin@velomedia.com.br',
-        name: 'Administrador Velo Master',
-        role: 'platform_admin',
-        organizationId: organization.id,
-      };
+      req.user = req.header('x-test-role') === 'advertiser'
+        ? {
+          id: 'user-advertiser',
+          email: 'advertiser@example.com',
+          name: advertiser.companyName,
+          role: 'advertiser',
+          organizationId: organization.id,
+          advertiserId: advertiser.id,
+        }
+        : {
+          id: 'user_master',
+          email: 'admin@velomedia.com.br',
+          name: 'Administrador Velo Master',
+          role: 'platform_admin',
+          organizationId: organization.id,
+        };
       next();
     });
     app.use(adminRequestRateLimiter);
@@ -124,7 +149,6 @@ describe('Asaas payment webhooks', () => {
     });
     const chargeResponse = await fetch(`http://127.0.0.1:${port}/api/v1/invoices/${createdInvoice.id}/charge-pix`, {
       method: 'POST',
-
     });
     expect(chargeResponse.status).toBe(200);
     expect(await chargeResponse.json()).toMatchObject({
@@ -132,6 +156,35 @@ describe('Asaas payment webhooks', () => {
       txid: 'pay_advertiser_billing',
       copiaECola: 'advertiser-copy-code',
     });
+    const advertiserHeaders = { 'x-test-role': 'advertiser' };
+    const portalResponse = await fetch(`http://127.0.0.1:${port}/api/v1/advertiser-portal`, { headers: advertiserHeaders });
+    expect(portalResponse.status).toBe(200);
+    const portalData = await portalResponse.json();
+    expect(portalData.advertiser.id).toBe(advertiser.id);
+    expect(portalData.invoices.map((item: { advertiserId: string }) => item.advertiserId)).not.toContain(otherAdvertiser.id);
+    const isolatedCampaignResponse = await fetch(`http://127.0.0.1:${port}/api/v1/campaigns`, { headers: advertiserHeaders });
+    expect(isolatedCampaignResponse.status).toBe(403);
+    const crossAdvertiserCharge = await fetch(`http://127.0.0.1:${port}/api/v1/advertiser-portal/invoices/invoice-other-advertiser/charge-pix`, {
+      method: 'POST',
+      headers: advertiserHeaders,
+    });
+    expect(crossAdvertiserCharge.status).toBe(404);
+    const mismatchedPayment = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'asaas-access-token': 'a'.repeat(48) },
+      body: JSON.stringify({
+        id: 'evt_asaas_mismatched_amount',
+        event: 'PAYMENT_CONFIRMED',
+        payment: {
+          id: 'pay_advertiser_billing',
+          externalReference: `invoice:${createdInvoice.id}`,
+          value: createdInvoice.amount - 1,
+        },
+      }),
+    });
+    expect(mismatchedPayment.status).toBe(409);
+    expect(new VeloStorage(process.env.DATA_FILE_PATH).getAdvertisers(organization.id)
+      .find(item => item.id === advertiser.id)?.prepaidBalance).toBe(12.5);
     const body = {
       id: 'evt_asaas_test',
       event: 'PAYMENT_CONFIRMED',

@@ -1429,7 +1429,10 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
       const matchingInvoices: Array<{ invoice: SaaSInvoice; organizationId: string }> = [];
       for (const organization of organizations) {
         const invoice = await repository.getInvoiceById(invoiceId, organization.id);
-        if (invoice && invoice.txid === payment.id && Number(payment.value) === invoice.amount) {
+        if (invoice && invoice.txid === payment.id) {
+          if (!Number.isFinite(Number(payment.value)) || Number(payment.value) !== invoice.amount) {
+            return res.status(409).json({ error: 'payment_amount_mismatch' });
+          }
           matchingInvoices.push({ invoice, organizationId: organization.id });
         }
       }
@@ -1446,20 +1449,13 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
             }
             match.invoice.status = 'paid';
             match.invoice.paidAt = paidAt;
-          } else {
-            const organization = await repository.getOrganizationById(match.organizationId);
-            if (match.invoice.planTier) {
-              const plan = await repository.getPlanById(match.invoice.planTier);
-              if (!plan || !organization) {
-                return res.status(409).json({ error: 'invoice_plan_unavailable' });
-              }
-              organization.planTier = plan.id;
-              organization.maxScreensLimit = plan.maxScreens;
-              organization.maxCampaignsLimit = plan.maxCampaigns;
-              organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
-              organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
-              await repository.saveOrganization(organization);
+          } else if (match.invoice.planTier) {
+            if (!await repository.confirmPlanInvoicePayment(match.invoice.id, match.organizationId, paidAt)) {
+              return res.status(409).json({ error: 'plan_invoice_confirmation_failed' });
             }
+            match.invoice.status = 'paid';
+            match.invoice.paidAt = paidAt;
+          } else {
             match.invoice.status = 'paid';
             match.invoice.paidAt = paidAt;
             if (!await repository.saveInvoice(match.invoice, match.organizationId)) {

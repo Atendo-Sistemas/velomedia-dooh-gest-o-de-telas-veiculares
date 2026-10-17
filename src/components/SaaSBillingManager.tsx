@@ -466,7 +466,7 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
                   <td className="px-3 py-3 text-right">{invoice.status === 'paid' ? <span className="text-emerald-300">Crédito confirmado</span> : <button onClick={() => setShowPixModal(invoice)} className="rounded-lg bg-emerald-700 px-3 py-1.5 font-bold text-white hover:bg-emerald-600">{invoice.txid ? 'Ver PIX' : 'Gerar PIX'}</button>}</td>
                 </tr>;
               })}
-              {!isLoadingInvoices && invoices.every(invoice => !invoice.advertiserId) && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">Nenhuma cobrança de anunciante cadastrada.</td></tr>}
+              {!isLoadingInvoices && invoices.filter(invoice => invoice.advertiserId).length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">Nenhuma cobrança de anunciante cadastrada.</td></tr>}
               {isLoadingInvoices && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">Carregando cobranças…</td></tr>}
             </tbody>
           </table>

@@ -1194,6 +1194,27 @@ export class VeloStorage {
     return true;
   }
 
+  public confirmPlanInvoicePayment(invoiceId: string, orgId: string, paidAt: string): boolean {
+    const invoice = this.memoryDb.invoices.find(item =>
+      item.id === invoiceId && item.organizationId === orgId && item.planTier && item.purpose === 'saas_plan',
+    );
+    if (!invoice) return false;
+    if (invoice.status === 'paid') return true;
+    const organization = this.memoryDb.organizations.find(item => item.id === orgId);
+    const plan = this.memoryDb.plans.find(item => item.id === invoice.planTier);
+    if (!organization || !plan) return false;
+
+    organization.planTier = plan.id;
+    organization.maxScreensLimit = plan.maxScreens;
+    organization.maxCampaignsLimit = plan.maxCampaigns;
+    organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+    organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
+    invoice.status = 'paid';
+    invoice.paidAt = paidAt;
+    this.save();
+    return true;
+  }
+
   // --- PROOF OF PLAY LOGS (STRICT MULTI-TENANT ISOLATION) ---
   public getProofOfPlayLogs(orgId: string, limit: number = 100): ProofOfPlayLog[] {
     return this.memoryDb.proofOfPlayLogs

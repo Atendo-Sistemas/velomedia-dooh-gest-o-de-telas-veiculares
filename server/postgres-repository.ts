@@ -169,6 +169,13 @@ export class PostgresRepository implements VeloRepository {
     );
     return result.rows[0]?.payload;
   }
+  private async byGlobalIdForUpdate<T>(kind: string, id: string, client: PoolClient): Promise<T | undefined> {
+    const result = await client.query<StoredRow<T>>(
+      'SELECT payload FROM repository_records WHERE kind=$1 AND id=$2 AND organization_id IS NULL FOR UPDATE',
+      [kind, id],
+    );
+    return result.rows[0]?.payload;
+  }
   private async save<T extends { id: string }>(kind: string, value: T, orgId?: string, client: Pool | PoolClient = this.pool): Promise<boolean> {
     const current = await client.query<{ organization_id: string | null }>(
       'SELECT organization_id FROM repository_records WHERE kind=$1 AND id=$2', [kind, value.id],
@@ -353,6 +360,51 @@ export class PostgresRepository implements VeloRepository {
       const savedAdvertiser = await this.save('advertiser', advertiser, orgId, client);
       const savedInvoice = await this.save('invoice', invoice, orgId, client);
       if (!savedAdvertiser || !savedInvoice) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async confirmPlanInvoicePayment(invoiceId: string, orgId: string, paidAt: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const invoice = await this.byIdForUpdate<SaaSInvoice>('invoice', invoiceId, orgId, client);
+      if (!invoice || !invoice.planTier || invoice.purpose !== 'saas_plan') {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      if (invoice.status === 'paid') {
+        await client.query('COMMIT');
+        return true;
+      }
+      const [organization, plan] = await Promise.all([
+        this.byGlobalIdForUpdate<SaaSOrganization>('organization', orgId, client),
+        this.byGlobalIdForUpdate<SaaSPlan>('plan', invoice.planTier, client),
+      ]);
+      if (!organization || !plan) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      organization.planTier = plan.id;
+      organization.maxScreensLimit = plan.maxScreens;
+      organization.maxCampaignsLimit = plan.maxCampaigns;
+      organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+      organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
+      invoice.status = 'paid';
+      invoice.paidAt = paidAt;
+      const [savedOrganization, savedInvoice] = await Promise.all([
+        this.save('organization', organization, undefined, client),
+        this.save('invoice', invoice, orgId, client),
+      ]);
+      if (!savedOrganization || !savedInvoice) {
         await client.query('ROLLBACK');
         return false;
       }

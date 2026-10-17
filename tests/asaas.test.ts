@@ -69,7 +69,8 @@ describe('Asaas PIX gateway', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new VeloPixGatewayAdapter().createPixCharge({
+    const gateway = new VeloPixGatewayAdapter();
+    const chargeParams = {
       invoiceId: 'inv-1',
       organizationId: 'org-1',
       organizationName: 'Organization',
@@ -79,7 +80,11 @@ describe('Asaas PIX gateway', () => {
       cnpj: '12.345.678/0001-95',
       email: 'billing@example.com',
       phone: '(11) 99999-0000',
-    });
+    };
+    const [result, concurrentResult] = await Promise.all([
+      gateway.createPixCharge(chargeParams),
+      gateway.createPixCharge(chargeParams),
+    ]);
 
     expect(result).toEqual({
       status: 'created',
@@ -88,6 +93,7 @@ describe('Asaas PIX gateway', () => {
       qrCodeUrl: 'data:image/png;base64,cXItY29kZQ==',
       expiresAt: '2026-10-20T23:59:00Z',
     });
+    expect(concurrentResult).toEqual(result);
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 

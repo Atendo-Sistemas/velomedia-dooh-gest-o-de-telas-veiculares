@@ -85,6 +85,7 @@ export interface VeloRepository {
   getInvoiceById(id: string, orgId: string): Promise<SaaSInvoice | undefined>;
   saveInvoice(invoice: SaaSInvoice, orgId: string): Promise<SaaSInvoice | null>;
   confirmAdvertiserInvoicePayment(invoiceId: string, orgId: string, paidAt: string): Promise<boolean>;
+  confirmPlanInvoicePayment(invoiceId: string, orgId: string, paidAt: string): Promise<boolean>;
 
   // SaaS Plans
   getPlans(): Promise<SaaSPlan[]>;
@@ -280,6 +281,10 @@ export class JsonDevelopmentRepository implements VeloRepository {
   }
   async confirmAdvertiserInvoicePayment(invoiceId: string, orgId: string, paidAt: string): Promise<boolean> {
     return storage.confirmAdvertiserInvoicePayment(invoiceId, orgId, paidAt);
+  }
+
+  async confirmPlanInvoicePayment(invoiceId: string, orgId: string, paidAt: string): Promise<boolean> {
+    return storage.confirmPlanInvoicePayment(invoiceId, orgId, paidAt);
   }
 
   async getPlans(): Promise<SaaSPlan[]> {
