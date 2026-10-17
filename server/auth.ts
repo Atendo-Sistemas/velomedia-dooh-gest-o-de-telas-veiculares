@@ -15,6 +15,7 @@ export interface AuthenticatedUser {
   name: string;
   role: SaaSUserRole;
   organizationId: string;
+  advertiserId?: string;
 }
 
 export interface AuthenticatedDevice {
@@ -170,6 +171,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
           name: user.name,
           role: user.role,
           organizationId: user.organizationId,
+          advertiserId: user.advertiserId,
         };
         req.sessionToken = token;
       } else {
