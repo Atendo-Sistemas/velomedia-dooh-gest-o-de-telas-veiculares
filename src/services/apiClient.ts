@@ -54,6 +54,29 @@ export const apiClient = {
   async getMe(): Promise<{ authenticated: boolean; user?: SaaSUser; organization?: SaaSOrganization }> {
     return request('/auth/me');
   },
+  async getAdvertiserPortal(): Promise<{
+    advertiser: AdvertiserAccount;
+    campaigns: Campaign[];
+    proofOfPlay: ProofOfPlayLog[];
+    invoices: SaaSInvoice[];
+  }> {
+    return request('/advertiser-portal');
+  },
+  async createAdvertiserPortalInvoice(amount: number): Promise<SaaSInvoice> {
+    return request('/advertiser-portal/invoices', {
+      method: 'POST',
+      body: JSON.stringify({ amount }),
+    });
+  },
+  async chargeAdvertiserPortalInvoice(invoiceId: string): Promise<{
+    success: boolean;
+    txid: string;
+    copiaECola: string;
+    qrCodeUrl: string;
+    expiresAt: string;
+  }> {
+    return request(`/advertiser-portal/invoices/${encodeURIComponent(invoiceId)}/charge-pix`, { method: 'POST' });
+  },
   async changeSuperAdminPassword(currentPassword: string, newPassword: string): Promise<{ success: boolean; reauthenticationRequired: boolean }> {
     return request('/auth/change-password', {
       method: 'POST',

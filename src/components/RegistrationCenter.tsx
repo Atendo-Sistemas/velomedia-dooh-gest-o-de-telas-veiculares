@@ -353,6 +353,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
   const [userPhone, setUserPhone] = useState('');
   const [userRole, setUserRole] = useState<SaaSUserRole>('fleet_manager');
   const [userOrgId, setUserOrgId] = useState<string>(currentOrg.id);
+  const [userAdvertiserId, setUserAdvertiserId] = useState('');
   const [userPassword, setUserPassword] = useState('');
   const [userFormError, setUserFormError] = useState<string | null>(null);
 
@@ -530,6 +531,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
     setUserPhone('');
     setUserRole('fleet_manager');
     setUserOrgId(currentOrg.id);
+    setUserAdvertiserId('');
     setUserPassword('');
     setUserFormError(null);
     setShowUserModal(true);
@@ -542,6 +544,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
     setUserPhone(user.phone);
     setUserRole(user.role);
     setUserOrgId(user.organizationId);
+    setUserAdvertiserId(user.advertiserId || '');
     setUserPassword('');
     setUserFormError(null);
     setShowUserModal(true);
@@ -838,6 +841,10 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
       setUserFormError('A nova senha deve ter pelo menos 16 caracteres.');
       return;
     }
+    if (userRole === 'advertiser' && !userAdvertiserId) {
+      setUserFormError('Selecione a conta de anunciante vinculada a este usuário.');
+      return;
+    }
 
     const targetOrg = organizations.find(o => o.id === userOrgId) || currentOrg;
 
@@ -851,6 +858,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
         role: userRole,
         organizationId: targetOrg.id,
         organizationName: targetOrg.name,
+        advertiserId: userRole === 'advertiser' ? userAdvertiserId : undefined,
       };
       await onUpdateSaaSUser(updated, userPassword || undefined);
       showToast(`Usuário ${userName} atualizado com sucesso!`);
@@ -863,6 +871,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
         role: userRole,
         organizationId: targetOrg.id,
         organizationName: targetOrg.name,
+        advertiserId: userRole === 'advertiser' ? userAdvertiserId : undefined,
         status: 'active',
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
         createdAt: new Date().toISOString().split('T')[0],
@@ -2696,6 +2705,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
                     <option value="financial_auditor">Auditor Financeiro / PoP</option>
                     <option value="ad_reviewer">Moderador de Campanhas</option>
                     <option value="support_tech">Técnico de Suporte IoT</option>
+                    <option value="advertiser">Anunciante (Portal Financeiro)</option>
                   </select>
                 </div>
                 <div>
@@ -2713,6 +2723,22 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
                   </select>
                 </div>
               </div>
+              {userRole === 'advertiser' && (
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">Conta de anunciante vinculada *</label>
+                  <select
+                    required
+                    value={userAdvertiserId}
+                    onChange={event => setUserAdvertiserId(event.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">Selecione um anunciante</option>
+                    {advertisers.filter(advertiser => !advertiser.organizationId || advertiser.organizationId === userOrgId).map(advertiser => (
+                      <option key={advertiser.id} value={advertiser.id}>{advertiser.companyName}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1 text-slate-400 text-[11px]">
                 <span className="font-bold text-indigo-300 block">Permissões automáticas concedidas:</span>

@@ -419,6 +419,7 @@ export interface SaaSUser {
   createdAt: string;
   lastLogin?: string;
   permissions: string[];
+  advertiserId?: string;
 }
 
 export interface AdvertiserAccount {

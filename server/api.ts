@@ -137,6 +137,16 @@ apiRouter.post('/auth/login', loginRequestRateLimiter, validateBody(LoginSchema)
     res.status(401).json({ error: 'invalid_credentials', message: 'E-mail ou senha incorretos.' });
     return;
   }
+  if (user.role === 'advertiser') {
+    const advertiser = user.advertiserId
+      ? await repository.getAdvertiserById(user.advertiserId, user.organizationId)
+      : undefined;
+    if (!advertiser || advertiser.status !== 'active') {
+      recordFailedLogin(ip);
+      res.status(401).json({ error: 'invalid_credentials', message: 'E-mail ou senha incorretos.' });
+      return;
+    }
+  }
 
   // Reset rate limit on success
   resetLoginRateLimit(ip);
@@ -198,6 +208,13 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
     user: user ? safeUser : undefined,
     organization: org,
   });
+
+  apiRouter.use((req: Request, res: Response, next) => {
+    if (req.user?.role === 'advertiser' && !req.path.startsWith('/advertiser-portal')) {
+      return res.status(403).json({ error: 'forbidden', message: 'Acesso restrito ao portal do anunciante.' });
+    }
+    next();
+  });
 });
 
 apiRouter.post('/auth/change-password', requireAuth, adminRequestRateLimiter, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
@@ -232,6 +249,9 @@ apiRouter.post('/users', requireAuth, adminRequestRateLimiter, requireRole(['sup
     if (!await repository.getOrganizationById(user.organizationId)) {
       return res.status(400).json({ error: 'invalid_organization', message: 'A organização selecionada não existe.' });
     }
+    if (user.role === 'advertiser' && !await repository.getAdvertiserById(user.advertiserId!, user.organizationId)) {
+      return res.status(400).json({ error: 'invalid_advertiser', message: 'O anunciante selecionado não pertence à organização.' });
+    }
     if (await repository.getUserByEmail(user.email)) {
       return res.status(409).json({ error: 'user_exists', message: 'Já existe um usuário com este e-mail.' });
     }
@@ -256,6 +276,9 @@ apiRouter.put('/users/:id', requireAuth, adminRequestRateLimiter, requireRole(['
     }
     if (!await repository.getOrganizationById(user.organizationId)) {
       return res.status(400).json({ error: 'invalid_organization', message: 'A organização selecionada não existe.' });
+    }
+    if (user.role === 'advertiser' && !await repository.getAdvertiserById(user.advertiserId!, user.organizationId)) {
+      return res.status(400).json({ error: 'invalid_advertiser', message: 'O anunciante selecionado não pertence à organização.' });
     }
     const existing = await repository.getUserById(user.id);
     if (!existing) return res.status(404).json({ error: 'not_found', message: 'Usuário não encontrado.' });
@@ -1024,6 +1047,108 @@ apiRouter.post('/remote-commands/:id/acknowledge', rateLimit({ windowMs: 60_000,
 // ============================================================================
 // 11. ADVERTISERS & INVOICES (Strict Multi-Tenant Isolation)
 // ============================================================================
+apiRouter.get('/advertiser-portal', requireAuth, requireRole(['advertiser']), async (req: Request, res: Response) => {
+  const advertiser = await repository.getAdvertiserById(req.user!.advertiserId!, req.user!.organizationId);
+  if (!advertiser || advertiser.status !== 'active') {
+    return res.status(404).json({ error: 'advertiser_not_found', message: 'Conta de anunciante não encontrada ou inativa.' });
+  }
+  const [allCampaigns, allProofOfPlay, invoices] = await Promise.all([
+    repository.getCampaigns(req.user!.organizationId),
+    repository.getProofOfPlayLogs(req.user!.organizationId, 500),
+    repository.getInvoices(req.user!.organizationId),
+  ]);
+  const advertiserNames = new Set([advertiser.companyName, advertiser.tradeName]
+    .map(name => name.trim().toLocaleLowerCase('pt-BR')).filter(Boolean));
+  const campaigns = allCampaigns.filter(campaign =>
+    advertiserNames.has(campaign.advertiser.trim().toLocaleLowerCase('pt-BR')),
+  );
+  const campaignIds = new Set(campaigns.map(campaign => campaign.id));
+  res.json({
+    advertiser,
+    campaigns,
+    proofOfPlay: allProofOfPlay.filter(log => campaignIds.has(log.campaignId)),
+    invoices: invoices.filter(invoice => invoice.advertiserId === advertiser.id),
+  });
+});
+
+apiRouter.post('/advertiser-portal/invoices', requireAuth, adminRequestRateLimiter, requireRole(['advertiser']), validateBody(AdvertiserInvoiceRequestSchema), async (req: Request, res: Response) => {
+  const tenantId = req.user!.organizationId;
+  const advertiser = await repository.getAdvertiserById(req.user!.advertiserId!, tenantId);
+  if (!advertiser || advertiser.status !== 'active') {
+    return res.status(404).json({ error: 'advertiser_not_found', message: 'Conta de anunciante não encontrada ou inativa.' });
+  }
+  const issuedAt = new Date();
+  const issueDate = issuedAt.toISOString().slice(0, 10);
+  const invoice: SaaSInvoice = {
+    id: `adv_inv_${randomUUID()}`,
+    invoiceNumber: `ADV-${issueDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
+    organizationId: tenantId,
+    organizationName: advertiser.companyName,
+    advertiserId: advertiser.id,
+    purpose: 'advertiser_recharge',
+    issueDate,
+    dueDate: new Date(issuedAt.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    month: issueDate.slice(0, 7),
+    amount: req.body.amount,
+    status: 'pending',
+    screensBilled: 0,
+    paymentMethod: 'pix',
+  };
+  const saved = await repository.saveInvoice(invoice, tenantId);
+  if (!saved) return res.status(409).json({ error: 'invoice_conflict', message: 'Não foi possível registrar a fatura.' });
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'ADVERTISER_PORTAL_CREATE_INVOICE',
+    resource: 'invoices',
+    resourceId: saved.id,
+    details: { advertiserId: advertiser.id, amount: saved.amount },
+    ipAddress: req.ip,
+  });
+  res.status(201).json(saved);
+});
+
+apiRouter.post('/advertiser-portal/invoices/:id/charge-pix', requireAuth, adminRequestRateLimiter, requireRole(['advertiser']), async (req: Request, res: Response) => {
+  const tenantId = req.user!.organizationId;
+  const invoice = await repository.getInvoiceById(req.params.id, tenantId);
+  if (!invoice || invoice.advertiserId !== req.user!.advertiserId) {
+    return res.status(404).json({ error: 'not_found', message: 'Cobrança não encontrada.' });
+  }
+  if (invoice.status === 'paid') {
+    return res.status(409).json({ error: 'invoice_already_paid', message: 'Esta cobrança já foi paga.' });
+  }
+  const advertiser = await repository.getAdvertiserById(req.user!.advertiserId!, tenantId);
+  if (!advertiser || advertiser.status !== 'active') {
+    return res.status(404).json({ error: 'advertiser_not_found', message: 'Conta de anunciante não encontrada ou inativa.' });
+  }
+  const result = await pixGateway.createPixCharge({
+    invoiceId: invoice.id,
+    organizationId: tenantId,
+    amount: invoice.amount,
+    organizationName: advertiser.companyName,
+    customerReference: `advertiser:${tenantId}:${advertiser.id}`,
+    description: `Recarga de mídia ${advertiser.companyName} #${invoice.invoiceNumber}`,
+    dueDate: invoice.dueDate,
+    cnpj: advertiser.cnpj,
+    email: advertiser.email,
+    phone: advertiser.phone,
+  });
+  if (result.status === 'payment_provider_not_configured') {
+    return res.status(503).json({ error: 'payment_provider_not_configured', message: result.error || 'Provedor de pagamentos PIX não está configurado.' });
+  }
+  if (result.status === 'failed') {
+    return res.status(502).json({ error: 'payment_creation_failed', message: result.error });
+  }
+  invoice.txid = result.txid;
+  invoice.pixQrCode = result.copiaECola;
+  invoice.pixQrCodeUrl = result.qrCodeUrl;
+  invoice.pixQrCodeExpiresAt = result.expiresAt;
+  const saved = await repository.saveInvoice(invoice, tenantId);
+  if (!saved) return res.status(500).json({ error: 'payment_record_failed', message: 'Não foi possível salvar os dados da cobrança.' });
+  res.json({ success: true, txid: result.txid, copiaECola: result.copiaECola, qrCodeUrl: result.qrCodeUrl, expiresAt: result.expiresAt });
+});
+
 apiRouter.get('/advertisers', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
   res.json(await repository.getAdvertisers(tenantId));

@@ -158,7 +158,7 @@ export default function App() {
 
   // Bootstrap live data from backend API after authentication
   useEffect(() => {
-    if (!authenticatedUser) return;
+    if (!authenticatedUser || authenticatedUser.role === 'advertiser') return;
     let isMounted = true;
     async function loadApiData() {
       try {
@@ -672,7 +672,7 @@ export default function App() {
     );
   }
 
-  if (!isKioskMode && (isCheckingSession || (authenticatedUser && isLoadingDashboard))) {
+  if (!isKioskMode && (isCheckingSession || (authenticatedUser && authenticatedUser.role !== 'advertiser' && isLoadingDashboard))) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center" role="status">
         <div className="flex items-center gap-3">
@@ -685,6 +685,10 @@ export default function App() {
 
   if (!isKioskMode && !authenticatedUser) {
     return <LoginPage onLogin={handleLogin} />;
+  }
+
+  if (!isKioskMode && authenticatedUser?.role === 'advertiser') {
+    return <AdvertiserPortal onLogout={handleLogout} />;
   }
 
   // If in Pure Kiosk Player Mode, render full screen TV layout directly

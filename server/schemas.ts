@@ -11,7 +11,7 @@ export const ChangePasswordSchema = z.object({
   newPassword: z.string().min(16).max(256),
 });
 
-export const SaaSUserSchema = z.object({
+const SaaSUserBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(2).max(120),
   email: z.string().email(),
@@ -24,15 +24,28 @@ export const SaaSUserSchema = z.object({
   createdAt: z.string(),
   lastLogin: z.string().optional(),
   permissions: z.array(z.string()),
+  advertiserId: z.string().min(1).optional(),
 });
 
-export const CreateSaaSUserSchema = SaaSUserSchema.extend({
+const validateAdvertiserUser = <T extends z.infer<typeof SaaSUserBaseSchema>>(user: T, ctx: z.RefinementCtx) => {
+  if (user.role === 'advertiser' ? !user.advertiserId : Boolean(user.advertiserId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Vincule uma conta de anunciante somente a usuários com perfil anunciante.',
+      path: ['advertiserId'],
+    });
+  }
+};
+
+export const SaaSUserSchema = SaaSUserBaseSchema.superRefine(validateAdvertiserUser);
+
+export const CreateSaaSUserSchema = SaaSUserBaseSchema.extend({
   password: z.string().min(16).max(256),
-});
+}).superRefine(validateAdvertiserUser);
 
-export const UpdateSaaSUserSchema = SaaSUserSchema.extend({
+export const UpdateSaaSUserSchema = SaaSUserBaseSchema.extend({
   password: z.string().min(16).max(256).optional(),
-});
+}).superRefine(validateAdvertiserUser);
 
 export const OrganizationSchema = z.object({
   id: z.string().min(1),
