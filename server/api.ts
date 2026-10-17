@@ -85,7 +85,7 @@ apiRouter.get('/health', async (_req: Request, res: Response) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.5.0-beta.6',
+    version: '2.5.0-beta.7',
     environment: process.env.NODE_ENV || 'production',
   });
 });
@@ -208,13 +208,15 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
     user: user ? safeUser : undefined,
     organization: req.user!.role === 'advertiser' ? undefined : org,
   });
+});
 
-  apiRouter.use((req: Request, res: Response, next) => {
-    if (req.user?.role === 'advertiser' && !req.path.startsWith('/advertiser-portal')) {
-      return res.status(403).json({ error: 'forbidden', message: 'Acesso restrito ao portal do anunciante.' });
-    }
-    next();
-  });
+apiRouter.use((req: Request, res: Response, next) => {
+  const isAuthRoute = req.path.startsWith('/auth/');
+  const isAdvertiserPortalRoute = req.path === '/advertiser-portal' || req.path.startsWith('/advertiser-portal/');
+  if (req.user?.role === 'advertiser' && !isAuthRoute && !isAdvertiserPortalRoute) {
+    return res.status(403).json({ error: 'forbidden', message: 'Acesso restrito ao portal do anunciante.' });
+  }
+  next();
 });
 
 apiRouter.post('/auth/change-password', requireAuth, adminRequestRateLimiter, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
@@ -683,7 +685,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.5.0-beta.6',
+      appVersion: '2.5.0-beta.7',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
@@ -1058,7 +1060,7 @@ apiRouter.get('/advertiser-portal', requireAuth, requireRole(['advertiser']), as
     repository.getInvoices(req.user!.organizationId),
   ]);
   const advertiserNames = new Set([advertiser.companyName, advertiser.tradeName]
-    .map(name => name.trim().toLocaleLowerCase('pt-BR')).filter(Boolean));
+    .map(name => (name ?? '').trim().toLocaleLowerCase('pt-BR')).filter(Boolean));
   const campaigns = allCampaigns.filter(campaign =>
     advertiserNames.has(campaign.advertiser.trim().toLocaleLowerCase('pt-BR')),
   );
@@ -1264,6 +1266,9 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
   const invoice = req.body as SaaSInvoice;
   if (invoice.advertiserId || invoice.purpose === 'advertiser_recharge') {
     return res.status(400).json({ error: 'use_advertiser_invoice_route', message: 'Crie cobranças de anunciantes pela rota específica do anunciante.' });
+  }
+  if (!invoice.planTier) {
+    return res.status(400).json({ error: 'plan_required', message: 'Selecione um plano para criar a fatura.' });
   }
   if (invoice.status !== 'pending') {
     return res.status(400).json({ error: 'invalid_invoice_status', message: 'Uma fatura nova deve iniciar como pendente.' });
