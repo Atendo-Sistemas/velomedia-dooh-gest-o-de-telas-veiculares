@@ -151,6 +151,79 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
     setIsCreateModalOpen(true);
   };
 
+  const openPlanModal = (plan?: SaaSPlan) => {
+    setEditingPlan(plan || null);
+    setPlanName(plan?.name || '');
+    setPlanPricePerScreen(plan?.pricePerScreenMonth || 0);
+    setPlanBaseFee(plan?.baseMonthlyFee || 0);
+    setPlanMaxScreens(plan?.maxScreens || 5);
+    setPlanMaxCampaigns(plan?.maxCampaigns || 10);
+    setPlanFeatures(plan?.features.join('\n') || '');
+    setPlanRecommended(plan?.recommended || false);
+    setPlanError(null);
+    setIsPlanModalOpen(true);
+  };
+
+  const handleSavePlan = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const id = editingPlan?.id || planName.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    if (!id || (!editingPlan && plans.some(plan => plan.id === id))) {
+      setPlanError('Já existe um plano com esse nome. Escolha outro nome.');
+      return;
+    }
+
+    try {
+      await onSavePlan({
+        id,
+        name: planName.trim(),
+        pricePerScreenMonth: Number(planPricePerScreen),
+        baseMonthlyFee: Number(planBaseFee),
+        maxScreens: Number(planMaxScreens),
+        maxCampaigns: Number(planMaxCampaigns),
+        features: planFeatures.split('\n').map(feature => feature.trim()).filter(Boolean),
+        recommended: planRecommended,
+      });
+      setIsPlanModalOpen(false);
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : 'Não foi possível salvar o plano.');
+    }
+  };
+
+  const handleDeletePlan = async (plan: SaaSPlan) => {
+    if (!window.confirm(`Excluir o plano ${plan.name}?`)) return;
+    setPlanError(null);
+    try {
+      await onDeletePlan(plan.id);
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : 'Não foi possível excluir o plano.');
+    }
+  };
+
+  const handleChangePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setPasswordError(null);
+    if (newPassword.length < 16) {
+      setPasswordError('A nova senha deve ter pelo menos 16 caracteres.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('A confirmação da senha não corresponde.');
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      await onChangeSuperAdminPassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      setPasswordError(error instanceof Error ? error.message : 'Não foi possível alterar a senha.');
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   const handleSaveCompany = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -183,78 +256,6 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
         customDomain: formCustomDomain.trim() || undefined,
       };
 
-      const openPlanModal = (plan?: SaaSPlan) => {
-        setEditingPlan(plan || null);
-        setPlanName(plan?.name || '');
-        setPlanPricePerScreen(plan?.pricePerScreenMonth || 0);
-        setPlanBaseFee(plan?.baseMonthlyFee || 0);
-        setPlanMaxScreens(plan?.maxScreens || 5);
-        setPlanMaxCampaigns(plan?.maxCampaigns || 10);
-        setPlanFeatures(plan?.features.join('\n') || '');
-        setPlanRecommended(plan?.recommended || false);
-        setPlanError(null);
-        setIsPlanModalOpen(true);
-      };
-
-      const handleSavePlan = async (event: React.FormEvent) => {
-        event.preventDefault();
-        const id = editingPlan?.id || planName.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-          .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-        if (!id || (!editingPlan && plans.some(plan => plan.id === id))) {
-          setPlanError('Já existe um plano com esse nome. Escolha outro nome.');
-          return;
-        }
-
-        try {
-          await onSavePlan({
-            id,
-            name: planName.trim(),
-            pricePerScreenMonth: Number(planPricePerScreen),
-            baseMonthlyFee: Number(planBaseFee),
-            maxScreens: Number(planMaxScreens),
-            maxCampaigns: Number(planMaxCampaigns),
-            features: planFeatures.split('\n').map(feature => feature.trim()).filter(Boolean),
-            recommended: planRecommended,
-          });
-          setIsPlanModalOpen(false);
-        } catch (error) {
-          setPlanError(error instanceof Error ? error.message : 'Não foi possível salvar o plano.');
-        }
-      };
-
-      const handleDeletePlan = async (plan: SaaSPlan) => {
-        if (!window.confirm(`Excluir o plano ${plan.name}?`)) return;
-        setPlanError(null);
-        try {
-          await onDeletePlan(plan.id);
-        } catch (error) {
-          setPlanError(error instanceof Error ? error.message : 'Não foi possível excluir o plano.');
-        }
-      };
-
-      const handleChangePassword = async (event: React.FormEvent) => {
-        event.preventDefault();
-        setPasswordError(null);
-        if (newPassword.length < 16) {
-          setPasswordError('A nova senha deve ter pelo menos 16 caracteres.');
-          return;
-        }
-        if (newPassword !== confirmPassword) {
-          setPasswordError('A confirmação da senha não corresponde.');
-          return;
-        }
-        setIsChangingPassword(true);
-        try {
-          await onChangeSuperAdminPassword(currentPassword, newPassword);
-          setCurrentPassword('');
-          setNewPassword('');
-          setConfirmPassword('');
-        } catch (error) {
-          setPasswordError(error instanceof Error ? error.message : 'Não foi possível alterar a senha.');
-        } finally {
-          setIsChangingPassword(false);
-        }
-      };
       onUpdateOrg(updated);
     } else {
       // Create new

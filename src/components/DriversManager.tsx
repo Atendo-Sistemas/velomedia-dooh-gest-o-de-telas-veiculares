@@ -532,7 +532,7 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
               </div>
 
               <button
-                onClick={() => setShowAddDriverModal(true)}
+                onClick={onManageDrivers}
                 className="px-5 py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white rounded-xl text-xs font-bold whitespace-nowrap shadow-lg flex items-center space-x-2 flex-shrink-0"
               >
                 <Smartphone className="w-4 h-4" />
@@ -707,7 +707,7 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
             </div>
 
             <button
-              onClick={() => setShowAddDriverModal(true)}
+              onClick={onManageDrivers}
               className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-lg flex-shrink-0"
             >
               <Gift className="w-4 h-4" />
@@ -1015,7 +1015,7 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
                   <span className="text-slate-300">Deseja cadastrar um parceiro com esta simulação agora?</span>
                 </div>
                 <button
-                  onClick={() => setShowAddDriverModal(true)}
+                  onClick={onManageDrivers}
                   className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg transition"
                 >
                   Cadastrar Agora
