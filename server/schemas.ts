@@ -6,6 +6,34 @@ export const LoginSchema = z.object({
   password: z.string().min(6, 'Senha deve ter pelo menos 6 caracteres'),
 });
 
+export const ChangePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(256),
+  newPassword: z.string().min(16).max(256),
+});
+
+export const SaaSUserSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(2).max(120),
+  email: z.string().email(),
+  phone: z.string().max(32),
+  role: z.enum(['super_admin', 'platform_admin', 'organization_admin', 'fleet_manager', 'operator', 'financial_auditor', 'ad_reviewer', 'support_tech', 'driver', 'advertiser', 'viewer']),
+  organizationId: z.string().min(1),
+  organizationName: z.string().min(1),
+  status: z.enum(['active', 'pending', 'suspended']),
+  avatar: z.string().optional(),
+  createdAt: z.string(),
+  lastLogin: z.string().optional(),
+  permissions: z.array(z.string()),
+});
+
+export const CreateSaaSUserSchema = SaaSUserSchema.extend({
+  password: z.string().min(16).max(256),
+});
+
+export const UpdateSaaSUserSchema = SaaSUserSchema.extend({
+  password: z.string().min(16).max(256).optional(),
+});
+
 export const OrganizationSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -14,7 +42,7 @@ export const OrganizationSchema = z.object({
   cnpj: z.string(),
   city: z.string(),
   state: z.string(),
-  planTier: z.enum(['starter', 'pro_fleet', 'enterprise_network']),
+  planTier: z.string().min(1),
   activeScreensCount: z.number().nonnegative(),
   maxScreensLimit: z.number().nonnegative(),
   activeCampaignsCount: z.number().nonnegative(),
@@ -60,7 +88,7 @@ export const DriverSchema = z.object({
   serviceType: z.string().default('Uber/99'),
   phone: z.string().min(8),
   pixKey: z.string().min(4),
-  pixKeyType: z.enum(['CPF', 'CNPJ', 'EMAIL', 'TELEFONE', 'ALEATORIA']),
+  pixKeyType: z.enum(['CPF', 'CNPJ', 'EMAIL', 'TELEFONE', 'ALEATORIA']).optional(),
   totalRidesMonth: z.number().nonnegative().default(0),
   totalEarningsMonth: z.number().nonnegative().default(0),
   pendingBalance: z.number().nonnegative().default(0),
@@ -68,6 +96,13 @@ export const DriverSchema = z.object({
   rating: z.number().min(1).max(5).default(5.0),
   screenUptimeRating: z.number().min(0).max(100).default(100),
   referralCode: z.string().optional(),
+  referredByDriverId: z.string().optional(),
+  referralsCount: z.number().nonnegative().optional(),
+  referralRecurringBonusMonthly: z.number().nonnegative().optional(),
+  referralTotalEarnedLifetime: z.number().nonnegative().optional(),
+  contractType: z.enum(['company_equipment', 'byod_driver_equipment']).optional(),
+  revenueSharePercent: z.number().min(0).max(100).optional(),
+  deviceModelOwned: z.string().optional(),
   workingCity: z.string().min(2),
   workingRegion: z.string().min(2),
   workingCenter: z.object({
@@ -289,6 +324,7 @@ export const InvoiceSchema = z.object({
   invoiceNumber: z.string().min(1),
   organizationId: z.string().optional(),
   organizationName: z.string().optional(),
+  planTier: z.string().min(1).optional(),
   month: z.string().optional(),
   issueDate: z.string(),
   dueDate: z.string(),
@@ -303,6 +339,19 @@ export const InvoiceSchema = z.object({
   txid: z.string().optional(),
   pixQrCodeExpiresAt: z.string().optional(),
   paidAt: z.string().optional(),
+});
+
+export const SaaSPlanSchema = z.object({
+  id: z.string().regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/),
+  name: z.string().trim().min(1).max(80),
+  pricePerScreenMonth: z.number().nonnegative(),
+  baseMonthlyFee: z.number().nonnegative(),
+  maxScreens: z.number().int().positive(),
+  maxCampaigns: z.number().int().positive(),
+  features: z.array(z.string().trim().min(1).max(120)).max(20),
+  recommended: z.boolean().optional(),
+}).refine(plan => plan.pricePerScreenMonth > 0 || plan.baseMonthlyFee > 0, {
+  message: 'O plano deve ter uma taxa base ou preço por tela maior que zero.',
 });
 
 export const WebhookEventSchema = z.object({

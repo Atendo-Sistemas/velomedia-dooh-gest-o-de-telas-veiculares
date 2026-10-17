@@ -11,21 +11,26 @@ import type {
   SaaSOrganization, 
   SaaSUser, 
   SaaSUserRole,
-  AdvertiserAccount, 
-  SaaSInvoice 
+  AdvertiserAccount,
+  SaaSInvoice,
+  SaaSPlan,
+  SystemAuditLog,
 } from '../src/types';
+import { SAAS_PLANS } from '../src/data/saasPlans';
 
-export interface AuditLog {
-  id: string;
-  organizationId: string;
-  userId?: string;
-  userEmail?: string;
-  action: string;
-  resource: string;
-  resourceId?: string;
-  details?: Record<string, any>;
-  ipAddress?: string;
-  createdAt: string;
+export type AuditLog = SystemAuditLog;
+
+export function normalizeAuditLog(log: AuditLog): AuditLog {
+  return {
+    ...log,
+    organizationId: log.organizationId.trim(),
+    userEmail: log.userEmail?.trim().toLowerCase(),
+    action: log.action.trim().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toUpperCase(),
+    resource: log.resource.trim().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toLowerCase(),
+    resourceId: log.resourceId?.trim() || undefined,
+    details: log.details && typeof log.details === 'object' && !Array.isArray(log.details) ? log.details : undefined,
+    ipAddress: log.ipAddress?.trim() || undefined,
+  };
 }
 
 export interface PairingTokenRecord {
@@ -93,6 +98,7 @@ interface DatabaseSchema {
   proofOfPlayLogs: ProofOfPlayLog[];
   advertisers: AdvertiserAccount[];
   invoices: SaaSInvoice[];
+  plans: SaaSPlan[];
   auditLogs: AuditLog[];
   pairingTokens: PairingTokenRecord[];
   remoteCommands: RemoteCommandRecord[];
@@ -131,6 +137,7 @@ export class VeloStorage {
         if (!parsed.deviceCredentials) parsed.deviceCredentials = [];
         if (!parsed.replayLogs) parsed.replayLogs = [];
         if (!parsed.webhooks) parsed.webhooks = [];
+        if (!parsed.plans) parsed.plans = structuredClone(SAAS_PLANS);
         if (process.env.NODE_ENV === 'production') {
           return this.ensureProductionSuperAdmin(parsed);
         }
@@ -287,6 +294,7 @@ export class VeloStorage {
         proofOfPlayLogs: [],
         advertisers: [],
         invoices: [],
+        plans: structuredClone(SAAS_PLANS),
         auditLogs: [],
         pairingTokens: [],
         remoteCommands: [],
@@ -705,6 +713,7 @@ export class VeloStorage {
       proofOfPlayLogs: [],
       advertisers: initialAdvertisers,
       invoices: initialInvoices,
+      plans: structuredClone(SAAS_PLANS),
       auditLogs: [],
       pairingTokens: [],
       remoteCommands: [],
@@ -851,6 +860,12 @@ export class VeloStorage {
     if (this.memoryDb.sessions.length !== before) {
       this.save();
       return true;
+    }
+
+    public deleteSessionsForUser(userId: string): void {
+      const before = this.memoryDb.sessions.length;
+      this.memoryDb.sessions = this.memoryDb.sessions.filter(session => session.userId !== userId);
+      if (this.memoryDb.sessions.length !== before) this.save();
     }
     return false;
   }
@@ -1116,6 +1131,30 @@ export class VeloStorage {
     return this.memoryDb.invoices.filter(i => i.organizationId === orgId);
   }
 
+  public getPlans(): SaaSPlan[] {
+    return this.memoryDb.plans;
+  }
+
+  public getPlanById(id: string): SaaSPlan | undefined {
+    return this.memoryDb.plans.find(plan => plan.id === id);
+  }
+
+  public savePlan(plan: SaaSPlan): SaaSPlan | null {
+    const index = this.memoryDb.plans.findIndex(existing => existing.id === plan.id);
+    if (index >= 0) this.memoryDb.plans[index] = plan;
+    else this.memoryDb.plans.push(plan);
+    this.save();
+    return plan;
+  }
+
+  public deletePlan(id: string): boolean {
+    const before = this.memoryDb.plans.length;
+    this.memoryDb.plans = this.memoryDb.plans.filter(plan => plan.id !== id);
+    if (this.memoryDb.plans.length === before) return false;
+    this.save();
+    return true;
+  }
+
   public getInvoiceById(id: string, orgId: string): SaaSInvoice | undefined {
     return this.memoryDb.invoices.find(i => i.id === id && i.organizationId === orgId);
   }
@@ -1238,11 +1277,11 @@ export class VeloStorage {
 
   // --- AUDIT LOGS ---
   public logAudit(log: Omit<AuditLog, 'id' | 'createdAt'>): void {
-    const record: AuditLog = {
+    const record = normalizeAuditLog({
       id: `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
       createdAt: new Date().toISOString(),
       ...log,
-    };
+    });
     this.memoryDb.auditLogs.unshift(record);
     if (this.memoryDb.auditLogs.length > 5000) {
       this.memoryDb.auditLogs.length = 5000;
@@ -1253,6 +1292,14 @@ export class VeloStorage {
   public getAuditLogs(orgId: string, limit: number = 100): AuditLog[] {
     return this.memoryDb.auditLogs
       .filter(a => a.organizationId === orgId)
+      .map(normalizeAuditLog)
+      .slice(0, limit);
+  }
+
+  public getAllAuditLogs(limit: number = 100): AuditLog[] {
+    return this.memoryDb.auditLogs
+      .map(normalizeAuditLog)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
   }
 }

@@ -30,37 +30,29 @@ import {
   Info
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { Driver, DriverReferral } from '../types';
+import { Driver } from '../types';
 import { INITIAL_REFERRALS } from '../data/mockData';
 
 interface DriversManagerProps {
   drivers: Driver[];
-  onPayDriverPix: (driverId: string) => void;
+  onPayDriverPix: (driverId: string) => Promise<{ success: boolean; paidAmount: number }>;
+  onManageDrivers: () => void;
 }
 
 export const DriversManager: React.FC<DriversManagerProps> = ({
   drivers,
   onPayDriverPix,
+  onManageDrivers,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'drivers_list' | 'byod_contracts' | 'referral_network' | 'simulator'>('drivers_list');
   const [searchTerm, setSearchTerm] = useState('');
   const [contractFilter, setContractFilter] = useState<'all' | 'byod' | 'company'>('all');
   const [paidDrivers, setPaidDrivers] = useState<string[]>([]);
-  const [referrals, setReferrals] = useState<DriverReferral[]>(INITIAL_REFERRALS);
+  const [processingDriverId, setProcessingDriverId] = useState<string | null>(null);
+  const [payoutError, setPayoutError] = useState<string | null>(null);
+  const referrals = INITIAL_REFERRALS;
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
-
-  // New Driver / BYOD Form Modal
-  const [showAddDriverModal, setShowAddDriverModal] = useState(false);
-  const [referrerId, setReferrerId] = useState(drivers[0]?.id || 'drv_01');
-  const [newDriverName, setNewDriverName] = useState('');
-  const [newDriverPhone, setNewDriverPhone] = useState('');
-  const [newDriverCarPlate, setNewDriverCarPlate] = useState('');
-  const [newDriverCarModel, setNewDriverCarModel] = useState('');
-  const [newDriverContractType, setNewDriverContractType] = useState<'byod_driver_equipment' | 'company_equipment'>('byod_driver_equipment');
-  const [newDriverDeviceModel, setNewDriverDeviceModel] = useState('Samsung Galaxy Tab A9+ 11" 4G');
-  const [newDriverService, setNewDriverService] = useState<'Uber Black' | 'Uber Comfort' | 'UberX' | 'Taxi Especial' | '99 Pop'>('Uber Comfort');
-  const [newDriverPix, setNewDriverPix] = useState('');
 
   // Referral Simulator State
   const [simContractType, setSimContractType] = useState<'byod' | 'company'>('byod');
@@ -84,17 +76,22 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
     return matchesSearch && matchesContract;
   });
 
-  const handlePixPayment = (driver: Driver) => {
-    setPaidDrivers([...paidDrivers, driver.id]);
-    onPayDriverPix(driver.id);
-    confetti({
-      particleCount: 40,
-      spread: 60,
-      origin: { y: 0.8 },
-    });
-    const totalAmount = driver.monthlyEarnings + (driver.referralRecurringBonusMonthly || 0);
-    setToastMessage(`Repasse PIX de R$ ${totalAmount.toFixed(2)} (incluindo R$ ${(driver.referralRecurringBonusMonthly || 0).toFixed(2)} de bônus indicação) enviado para ${driver.name}!`);
-    setTimeout(() => setToastMessage(null), 4000);
+  const handlePixPayment = async (driver: Driver) => {
+    if (processingDriverId) return;
+    setProcessingDriverId(driver.id);
+    setPayoutError(null);
+    try {
+      const result = await onPayDriverPix(driver.id);
+      if (!result.success) throw new Error('O repasse PIX não foi confirmado pelo provedor.');
+      setPaidDrivers(current => [...new Set([...current, driver.id])]);
+      confetti({ particleCount: 40, spread: 60, origin: { y: 0.8 } });
+      setToastMessage(`Repasse PIX de R$ ${result.paidAmount.toFixed(2)} confirmado para ${driver.name}.`);
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (error) {
+      setPayoutError(error instanceof Error ? error.message : 'Não foi possível confirmar o repasse PIX.');
+    } finally {
+      setProcessingDriverId(null);
+    }
   };
 
   const handleCopyReferralCode = (code: string) => {
@@ -102,44 +99,6 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
     setCopiedCode(code);
     confetti({ particleCount: 25, spread: 45, origin: { y: 0.85 } });
     setTimeout(() => setCopiedCode(null), 2500);
-  };
-
-  const handleCreateDriver = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newDriverName || !newDriverCarPlate) return;
-
-    const isByod = newDriverContractType === 'byod_driver_equipment';
-
-    // Also register referral link if chosen
-    if (referrerId) {
-      const newRef: DriverReferral = {
-        id: `ref_${Date.now()}`,
-        referrerDriverId: referrerId,
-        referredDriverId: `drv_${Date.now()}`,
-        referredDriverName: newDriverName,
-        referredCarPlate: newDriverCarPlate.toUpperCase(),
-        referredServiceType: newDriverService,
-        referredAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-        joinDate: new Date().toISOString().split('T')[0],
-        status: 'active',
-        currentMonthUptime: 99.2,
-        monthlyRecurringBonus: 50.00,
-        totalBonusEarned: 50.00,
-        lastPayoutDate: '2026-08-25',
-      };
-      setReferrals([newRef, ...referrals]);
-    }
-
-    setShowAddDriverModal(false);
-    confetti({ particleCount: 55, spread: 75 });
-    setToastMessage(`Motorista ${newDriverName} cadastrado na modalidade ${isByod ? 'BYOD (Equipamento Próprio - 45% Repasse)' : 'Comodato da Empresa (20% Repasse)'}!`);
-    
-    // Clear inputs
-    setNewDriverName('');
-    setNewDriverCarPlate('');
-    setNewDriverCarModel('');
-    setNewDriverPix('');
-    setTimeout(() => setToastMessage(null), 4500);
   };
 
   const byodDriversCount = drivers.filter(d => d.contractType === 'byod_driver_equipment').length;
@@ -179,11 +138,11 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
           </div>
 
           <button
-            onClick={() => setShowAddDriverModal(true)}
+            onClick={onManageDrivers}
             className="px-4 py-3 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-xl text-xs font-bold flex items-center space-x-2 shadow-lg shadow-indigo-500/20 transition"
           >
             <Smartphone className="w-4 h-4" />
-            <span>Cadastrar Motorista / BYOD</span>
+            <span>Cadastrar / editar motoristas</span>
           </button>
         </div>
       </div>
@@ -195,6 +154,11 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
             <span className="font-medium">{toastMessage}</span>
           </div>
           <span className="font-mono text-[10px] bg-emerald-900/80 px-2 py-0.5 rounded font-bold">PIX PROCESSADO</span>
+        </div>
+      )}
+      {payoutError && (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-950/70 p-3.5 text-xs text-rose-200" role="alert">
+          Repasse não efetuado: {payoutError}
         </div>
       )}
 
@@ -511,8 +475,8 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
                     </div>
 
                     <button
-                      onClick={() => handlePixPayment(driver)}
-                      disabled={isPaid}
+                      onClick={() => void handlePixPayment(driver)}
+                      disabled={isPaid || processingDriverId !== null}
                       className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition shadow-md ${
                         isPaid
                           ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/40 cursor-default'
@@ -527,7 +491,7 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
                       ) : (
                         <>
                           <Send className="w-4 h-4" />
-                          <span>Pagar Repasse + Bônus via PIX</span>
+                          <span>{processingDriverId === driver.id ? 'Processando repasse…' : 'Pagar Repasse + Bônus via PIX'}</span>
                         </>
                       )}
                     </button>
@@ -1062,199 +1026,6 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
 
           </div>
 
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL: CADASTRAR NOVO MOTORISTA (BYOD OU COMODATO) + INDICAÇÃO           */}
-      {/* ========================================================================= */}
-      {showAddDriverModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-lg shadow-2xl text-slate-100 p-6 space-y-4 max-h-[92vh] overflow-y-auto">
-            
-            <div className="flex items-center space-x-3 pb-3 border-b border-slate-800">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                <Smartphone className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-white">Cadastrar Motorista Parceiro</h2>
-                <p className="text-xs text-slate-400">Defina o contrato (BYOD ou Comodato) e o padrinho indicador</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleCreateDriver} className="space-y-4 pt-1 text-xs">
-              
-              {/* Modalidade de Contrato */}
-              <div className="space-y-1">
-                <label className="font-bold text-slate-300">Modalidade de Hardware:</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setNewDriverContractType('byod_driver_equipment')}
-                    className={`p-3 rounded-xl border text-left transition ${
-                      newDriverContractType === 'byod_driver_equipment'
-                        ? 'bg-indigo-950/90 border-indigo-400 text-white shadow-md'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div className="font-bold text-xs text-indigo-300 flex items-center justify-between">
-                      <span>BYOD (Equipamento Próprio)</span>
-                      {newDriverContractType === 'byod_driver_equipment' && <span className="text-cyan-400">✓</span>}
-                    </div>
-                    <span className="text-[10px] text-emerald-400 font-bold block mt-1">45% de Repasse PIX</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setNewDriverContractType('company_equipment')}
-                    className={`p-3 rounded-xl border text-left transition ${
-                      newDriverContractType === 'company_equipment'
-                        ? 'bg-blue-950/90 border-blue-400 text-white shadow-md'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div className="font-bold text-xs text-blue-300 flex items-center justify-between">
-                      <span>Comodato da Empresa</span>
-                      {newDriverContractType === 'company_equipment' && <span className="text-blue-400">✓</span>}
-                    </div>
-                    <span className="text-[10px] text-slate-400 font-bold block mt-1">20% de Repasse PIX</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Nome & Telefone */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-300">Nome do Motorista:</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Fernando Albuquerque"
-                    value={newDriverName}
-                    onChange={(e) => setNewDriverName(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-300">WhatsApp / Telefone:</label>
-                  <input
-                    type="text"
-                    placeholder="(11) 98765-4321"
-                    value={newDriverPhone}
-                    onChange={(e) => setNewDriverPhone(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-              </div>
-
-              {/* Placa & Veículo */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-300">Placa do Veículo:</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: ABC1D23"
-                    value={newDriverCarPlate}
-                    onChange={(e) => setNewDriverCarPlate(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white uppercase font-mono"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-300">Modelo do Veículo:</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Chevrolet Tracker Premier"
-                    value={newDriverCarModel}
-                    onChange={(e) => setNewDriverCarModel(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-              </div>
-
-              {/* Modelo do Tablet / Aparelho se for BYOD */}
-              {newDriverContractType === 'byod_driver_equipment' && (
-                <div className="space-y-1">
-                  <label className="font-bold text-indigo-300">Modelo do Tablet Pessoal do Motorista:</label>
-                  <input
-                    type="text"
-                    value={newDriverDeviceModel}
-                    onChange={(e) => setNewDriverDeviceModel(e.target.value)}
-                    className="w-full bg-slate-800 border border-indigo-500/50 rounded-xl px-3 py-2 text-white font-medium"
-                    placeholder="Ex: Samsung Galaxy Tab A9+, Xiaomi Pad 6, iPad 9th"
-                  />
-                </div>
-              )}
-
-              {/* Categoria */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-300">Categoria:</label>
-                  <select
-                    value={newDriverService}
-                    onChange={(e) => setNewDriverService(e.target.value as any)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
-                  >
-                    <option value="Uber Black">Uber Black</option>
-                    <option value="Uber Comfort">Uber Comfort</option>
-                    <option value="UberX">UberX</option>
-                    <option value="Taxi Especial">Taxi Especial</option>
-                    <option value="99 Pop">99 Pop</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-300">Chave PIX:</label>
-                  <input
-                    type="text"
-                    placeholder="CPF, E-mail ou Telefone"
-                    value={newDriverPix}
-                    onChange={(e) => setNewDriverPix(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Quem é o padrinho indicador */}
-              <div className="space-y-1 pt-1">
-                <label className="font-bold text-slate-300 flex items-center justify-between">
-                  <span>Padrinho Indicador (Bônus R$ 50/mês):</span>
-                  <span className="text-[10px] text-purple-300 font-normal">Opcional</span>
-                </label>
-                <select
-                  value={referrerId}
-                  onChange={(e) => setReferrerId(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
-                >
-                  <option value="">Sem Padrinho (Cadastro Direto)</option>
-                  {drivers.map(d => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} ({d.carModel} - {d.carPlate}) • Código: {d.referralCode}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowAddDriverModal(false)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 hover:from-cyan-400 hover:to-purple-500 text-white rounded-xl text-xs font-bold shadow-lg"
-                >
-                  Cadastrar & Ativar
-                </button>
-              </div>
-
-            </form>
-
-          </div>
         </div>
       )}
 

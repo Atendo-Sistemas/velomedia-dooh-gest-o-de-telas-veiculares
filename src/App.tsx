@@ -21,7 +21,7 @@ import { AdvertiserPortal } from './components/AdvertiserPortal';
 import { PassengerPortal } from './components/PassengerPortal';
 import { RegistrationCenter } from './components/RegistrationCenter';
 import { LoginPage } from './components/LoginPage';
-import { Campaign, Device, Driver, GeoFence, ProofOfPlayLog, SaaSOrganization, SaaSUser, AdvertiserAccount, PublicPlayerCampaign, PublicPlayerDevice } from './types';
+import { Campaign, Device, Driver, GeoFence, ProofOfPlayLog, SaaSOrganization, SaaSUser, AdvertiserAccount, PublicPlayerCampaign, PublicPlayerDevice, SaaSPlan } from './types';
 import { 
   INITIAL_CAMPAIGNS, 
   INITIAL_DEVICES, 
@@ -29,7 +29,6 @@ import {
   INITIAL_GEOFENCES, 
   INITIAL_ORGANIZATIONS,
   SAAS_PLANS,
-  INITIAL_INVOICES,
   INITIAL_ADVERTISER_PORTALS,
   INITIAL_SAAS_USERS,
   INITIAL_ADVERTISER_ACCOUNTS
@@ -80,6 +79,7 @@ export default function App() {
   };
 
   const [activeTab, setActiveTab] = useState<ActiveTab>(getInitialActiveTab);
+  const [registrationTab, setRegistrationTab] = useState<'drivers' | 'devices' | 'advertisers' | 'users' | 'franchises'>('drivers');
   const [isMasterMode, setIsMasterMode] = useState<boolean>(false);
   const [authenticatedUser, setAuthenticatedUser] = useState<SaaSUser | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
@@ -99,6 +99,7 @@ export default function App() {
 
   // SaaS multi-tenant state
   const [organizations, setOrganizations] = useState<SaaSOrganization[]>(INITIAL_ORGANIZATIONS);
+  const [plans, setPlans] = useState<SaaSPlan[]>(SAAS_PLANS);
   const [currentOrgId, setCurrentOrgId] = useState<string>(INITIAL_ORGANIZATIONS[0].id);
   const [saasUsers, setSaasUsers] = useState<SaaSUser[]>(INITIAL_SAAS_USERS);
   const [advertisers, setAdvertisers] = useState<AdvertiserAccount[]>(INITIAL_ADVERTISER_ACCOUNTS);
@@ -161,7 +162,7 @@ export default function App() {
     let isMounted = true;
     async function loadApiData() {
       try {
-        const [orgsRes, devsRes, campsRes, drvsRes, gfsRes, popsRes, advsRes] = await Promise.allSettled([
+        const [orgsRes, devsRes, campsRes, drvsRes, gfsRes, popsRes, advsRes, plansRes, usersRes] = await Promise.allSettled([
           apiClient.getOrganizations(),
           apiClient.getDevices(),
           apiClient.getCampaigns(),
@@ -169,6 +170,8 @@ export default function App() {
           apiClient.getGeoFences(),
           apiClient.getProofOfPlayLogs(50),
           apiClient.getAdvertisers(),
+          apiClient.getPlans(),
+          apiClient.getSaaSUsers(),
         ]);
 
         if (!isMounted) return;
@@ -194,6 +197,10 @@ export default function App() {
         if (advsRes.status === 'fulfilled') {
           setAdvertisers(advsRes.value);
         }
+        if (plansRes.status === 'fulfilled' && plansRes.value.length > 0) {
+          setPlans(plansRes.value);
+        }
+        if (usersRes.status === 'fulfilled') setSaasUsers(usersRes.value);
       } catch (err) {
         console.info('[VeloMedia] Initializing with default seed state:', err);
       } finally {
@@ -223,6 +230,11 @@ export default function App() {
       setAuthenticatedUser(null);
       setIsMasterMode(false);
     }
+  };
+
+  const handleChangeSuperAdminPassword = async (currentPassword: string, newPassword: string) => {
+    await apiClient.changeSuperAdminPassword(currentPassword, newPassword);
+    await handleLogout();
   };
 
   const handleUpdateOrg = async (updatedOrg: SaaSOrganization) => {
@@ -257,6 +269,18 @@ export default function App() {
       setOrganizations(previous);
       setApiError(`Erro ao remover organização: ${err.message || err}`);
     }
+  };
+
+  const handleSavePlan = async (plan: SaaSPlan) => {
+    const saved = plans.some(existing => existing.id === plan.id)
+      ? await apiClient.updatePlan(plan)
+      : await apiClient.createPlan(plan);
+    setPlans(current => [...current.filter(existing => existing.id !== saved.id), saved]);
+  };
+
+  const handleDeletePlan = async (planId: string) => {
+    await apiClient.deletePlan(planId);
+    setPlans(current => current.filter(plan => plan.id !== planId));
   };
 
   const handleSwitchOrg = (orgId: string) => {
@@ -340,7 +364,7 @@ export default function App() {
     const previous = [...advertisers];
     setAdvertisers(advertisers.map(a => a.id === updatedAdv.id ? updatedAdv : a));
     try {
-      const saved = await apiClient.saveAdvertiser(updatedAdv);
+      const saved = await apiClient.updateAdvertiser(updatedAdv);
       setAdvertisers(prev => prev.map(a => a.id === saved.id ? saved : a));
     } catch (err: any) {
       setAdvertisers(previous);
@@ -360,16 +384,41 @@ export default function App() {
   };
 
   // SaaS Users CRUD
-  const handleSaveSaaSUser = (newUser: SaaSUser) => {
-    setSaasUsers([newUser, ...saasUsers]);
+  const handleSaveSaaSUser = async (newUser: SaaSUser, password: string) => {
+    const previous = [...saasUsers];
+    setSaasUsers(current => [newUser, ...current]);
+    try {
+      const saved = await apiClient.createSaaSUser(newUser, password);
+      setSaasUsers(current => [saved, ...current.filter(user => user.id !== saved.id)]);
+    } catch (err: any) {
+      setSaasUsers(previous);
+      setApiError(`Erro ao criar usuário: ${err.message || err}`);
+      throw err;
+    }
   };
 
-  const handleUpdateSaaSUser = (updatedUser: SaaSUser) => {
-    setSaasUsers(saasUsers.map(u => u.id === updatedUser.id ? updatedUser : u));
+  const handleUpdateSaaSUser = async (updatedUser: SaaSUser, password?: string) => {
+    const previous = [...saasUsers];
+    setSaasUsers(current => current.map(user => user.id === updatedUser.id ? updatedUser : user));
+    try {
+      const saved = await apiClient.updateSaaSUser(updatedUser, password);
+      setSaasUsers(current => current.map(user => user.id === saved.id ? saved : user));
+    } catch (err: any) {
+      setSaasUsers(previous);
+      setApiError(`Erro ao atualizar usuário: ${err.message || err}`);
+      throw err;
+    }
   };
 
-  const handleDeleteSaaSUser = (userId: string) => {
-    setSaasUsers(saasUsers.filter(u => u.id !== userId));
+  const handleDeleteSaaSUser = async (userId: string) => {
+    const previous = [...saasUsers];
+    setSaasUsers(current => current.filter(user => user.id !== userId));
+    try {
+      await apiClient.deleteSaaSUser(userId);
+    } catch (err: any) {
+      setSaasUsers(previous);
+      setApiError(`Erro ao excluir usuário: ${err.message || err}`);
+    }
   };
 
   // GeoFence handlers
@@ -594,7 +643,7 @@ export default function App() {
 
   // Driver PIX payment
   const handlePayDriverPix = (driverId: string) => {
-    apiClient.payoutDriverPix(driverId).catch(console.error);
+    return apiClient.payoutDriverPix(driverId);
   };
 
   const activeDeviceForPlayer = devices.find((d) => d.id === activePlayerDeviceId) || devices[0];
@@ -710,8 +759,7 @@ export default function App() {
         {isMasterMode ? (
           <SaaSMasterAdmin
             organizations={organizations}
-            plans={SAAS_PLANS}
-            invoices={INITIAL_INVOICES}
+            plans={plans}
             currentOrg={currentOrg}
             onSelectOrg={(org) => {
               setCurrentOrgId(org.id);
@@ -720,6 +768,9 @@ export default function App() {
             onUpdateOrg={handleUpdateOrg}
             onCreateOrg={handleCreateOrg}
             onDeleteOrg={handleDeleteOrg}
+            onSavePlan={handleSavePlan}
+            onDeletePlan={handleDeletePlan}
+            onChangeSuperAdminPassword={handleChangeSuperAdminPassword}
             onExitMasterMode={() => setIsMasterMode(false)}
           />
         ) : (
@@ -739,12 +790,14 @@ export default function App() {
 
             {activeTab === 'registrations' && (
               <RegistrationCenter
+                key={registrationTab}
+                initialTab={registrationTab}
                 drivers={drivers}
                 devices={devices}
                 advertisers={advertisers}
                 saasUsers={saasUsers}
                 organizations={organizations}
-                plans={SAAS_PLANS}
+                plans={plans}
                 currentOrg={currentOrg}
                 onSaveDriver={handleSaveDriver}
                 onUpdateDriver={handleUpdateDriver}
@@ -758,6 +811,7 @@ export default function App() {
                 onSaveSaaSUser={handleSaveSaaSUser}
                 onUpdateSaaSUser={handleUpdateSaaSUser}
                 onDeleteSaaSUser={handleDeleteSaaSUser}
+                canManageUsers={authenticatedUser?.role === 'super_admin'}
                 onSaveOrg={handleCreateOrg}
                 onUpdateOrg={handleUpdateOrg}
                 onDeleteOrg={handleDeleteOrg}
@@ -817,6 +871,10 @@ export default function App() {
               <DriversManager
                 drivers={drivers}
                 onPayDriverPix={handlePayDriverPix}
+                onManageDrivers={() => {
+                  setRegistrationTab('drivers');
+                  setActiveTab('registrations');
+                }}
               />
             )}
 
@@ -850,9 +908,14 @@ export default function App() {
             {activeTab === 'saas' && (
               <SaaSBillingManager
                 currentOrg={currentOrg}
-                onUpdateOrg={handleUpdateOrg}
                 onSwitchOrg={handleSwitchOrg}
                 organizations={organizations}
+                plans={plans}
+                advertisers={advertisers}
+                onManageClients={() => {
+                  setRegistrationTab('advertisers');
+                  setActiveTab('registrations');
+                }}
               />
             )}
 

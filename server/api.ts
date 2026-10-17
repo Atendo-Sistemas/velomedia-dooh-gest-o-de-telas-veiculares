@@ -39,6 +39,10 @@ import {
   PairingTokenRequestSchema,
   AdvertiserSchema,
   InvoiceSchema,
+  SaaSPlanSchema,
+  ChangePasswordSchema,
+  CreateSaaSUserSchema,
+  UpdateSaaSUserSchema,
   validateBody
 } from './schemas';
 import { pixGateway } from './billing';
@@ -50,7 +54,7 @@ import {
   loginRequestRateLimiter,
   publicPlayerRateLimiter,
 } from './rate-limit';
-import type { Device, Driver, Campaign, GeoFence, ProofOfPlayLog, AdvertiserAccount, SaaSInvoice } from '../src/types';
+import type { Device, Driver, Campaign, GeoFence, ProofOfPlayLog, AdvertiserAccount, SaaSInvoice, SaaSPlan, SaaSUser } from '../src/types';
 
 export const apiRouter = Router();
 const repository = getVeloRepository();
@@ -190,11 +194,194 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
     user,
     organization: org,
   });
+
+  apiRouter.post('/auth/change-password', requireAuth, requireRole(['super_admin']), validateBody(ChangePasswordSchema), async (req: Request, res: Response) => {
+    const user = await repository.getUserByEmail(req.user!.email);
+    if (!user?.passwordHash || !verifyPassword(req.body.currentPassword, user.passwordHash)) {
+      return res.status(401).json({ error: 'invalid_password', message: 'A senha atual está incorreta.' });
+    }
+    const { passwordHash: _passwordHash, ...safeUser } = user;
+    await repository.saveUser(safeUser, req.body.newPassword);
+    await repository.logAudit({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      action: 'CHANGE_SUPERADMIN_PASSWORD',
+      resource: 'users',
+      resourceId: req.user!.id,
+      ipAddress: req.ip,
+    });
+    await repository.deleteSessionsForUser(req.user!.id);
+    res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    res.json({ success: true, reauthenticationRequired: true });
+  });
+
+  apiRouter.get('/users', requireAuth, requireRole(['super_admin']), async (_req: Request, res: Response) => {
+    res.json(await repository.getUsers());
+  });
+
+  apiRouter.post('/users', requireAuth, requireRole(['super_admin']), validateBody(CreateSaaSUserSchema), async (req: Request, res: Response) => {
+    const { password, ...user } = req.body as SaaSUser & { password: string };
+    if (!await repository.getOrganizationById(user.organizationId)) {
+      return res.status(400).json({ error: 'invalid_organization', message: 'A organização selecionada não existe.' });
+    }
+    if (await repository.getUserByEmail(user.email)) {
+      return res.status(409).json({ error: 'user_exists', message: 'Já existe um usuário com este e-mail.' });
+    }
+    await repository.saveUser(user, password);
+    await repository.logAudit({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      action: 'CREATE_USER',
+      resource: 'users',
+      resourceId: user.id,
+      details: { role: user.role },
+      ipAddress: req.ip,
+    });
+    res.status(201).json(user);
+  });
+
+  apiRouter.put('/users/:id', requireAuth, requireRole(['super_admin']), validateBody(UpdateSaaSUserSchema), async (req: Request, res: Response) => {
+    const user = req.body as SaaSUser & { password?: string };
+    if (req.params.id !== user.id) {
+      return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID do usuário.' });
+    }
+    if (!await repository.getOrganizationById(user.organizationId)) {
+      return res.status(400).json({ error: 'invalid_organization', message: 'A organização selecionada não existe.' });
+    }
+    const existing = await repository.getUserById(user.id);
+    if (!existing) return res.status(404).json({ error: 'not_found', message: 'Usuário não encontrado.' });
+    const byEmail = await repository.getUserByEmail(user.email);
+    if (byEmail && byEmail.id !== user.id) {
+      return res.status(409).json({ error: 'user_exists', message: 'Já existe um usuário com este e-mail.' });
+    }
+    const { password, ...safeUser } = user;
+    await repository.saveUser(safeUser, password);
+    if (password) await repository.deleteSessionsForUser(user.id);
+    await repository.logAudit({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      action: password ? 'UPDATE_USER_AND_PASSWORD' : 'UPDATE_USER',
+      resource: 'users',
+      resourceId: user.id,
+      details: { role: user.role },
+      ipAddress: req.ip,
+    });
+    res.json(safeUser);
+  });
+
+  apiRouter.delete('/users/:id', requireAuth, requireRole(['super_admin']), async (req: Request, res: Response) => {
+    const user = await repository.getUserById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'not_found', message: 'Usuário não encontrado.' });
+    if (user.id === req.user!.id) {
+      return res.status(409).json({ error: 'cannot_delete_self', message: 'Não é possível excluir o usuário conectado.' });
+    }
+    if (user.role === 'super_admin') {
+      const activeAdmins = (await repository.getUsers()).filter(candidate => candidate.role === 'super_admin' && candidate.status === 'active');
+      if (activeAdmins.length <= 1) {
+        return res.status(409).json({ error: 'last_super_admin', message: 'O sistema precisa manter ao menos um superusuário ativo.' });
+      }
+    }
+    await repository.deleteSessionsForUser(user.id);
+    const deleted = await repository.deleteUser(user.id, user.organizationId);
+    if (!deleted) return res.status(404).json({ error: 'not_found', message: 'Usuário não encontrado.' });
+    await repository.logAudit({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      action: 'DELETE_USER',
+      resource: 'users',
+      resourceId: user.id,
+      ipAddress: req.ip,
+    });
+    res.json({ success: true });
+  });
 });
 
 // ============================================================================
 // 3. ORGANIZATIONS (Super Admin / Multi-Tenant Master)
 // ============================================================================
+apiRouter.get('/plans', requireAuth, async (_req: Request, res: Response) => {
+  res.json(await repository.getPlans());
+});
+
+apiRouter.post('/plans', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(SaaSPlanSchema), async (req: Request, res: Response) => {
+  if (await repository.getPlanById(req.body.id)) {
+    return res.status(409).json({ error: 'plan_exists', message: 'Já existe um plano com este identificador.' });
+  }
+  const saved = await repository.savePlan(req.body as SaaSPlan);
+  if (!saved) return res.status(409).json({ error: 'plan_conflict', message: 'Não foi possível salvar o plano.' });
+  await repository.logAudit({
+    organizationId: req.user!.organizationId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'CREATE_PLAN',
+    resource: 'plans',
+    resourceId: saved.id,
+    details: { name: saved.name },
+    ipAddress: req.ip,
+  });
+  res.status(201).json(saved);
+});
+
+apiRouter.put('/plans/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(SaaSPlanSchema), async (req: Request, res: Response) => {
+  if (req.params.id !== req.body.id) {
+    return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID do plano.' });
+  }
+  if (!await repository.getPlanById(req.params.id)) {
+    return res.status(404).json({ error: 'not_found', message: 'Plano não encontrado.' });
+  }
+  const saved = await repository.savePlan(req.body as SaaSPlan);
+  if (!saved) return res.status(409).json({ error: 'plan_conflict', message: 'Não foi possível atualizar o plano.' });
+  await repository.logAudit({
+    organizationId: req.user!.organizationId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'UPDATE_PLAN',
+    resource: 'plans',
+    resourceId: saved.id,
+    details: { name: saved.name },
+    ipAddress: req.ip,
+  });
+  res.json(saved);
+});
+
+apiRouter.delete('/plans/:id', requireAuth, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
+  const plans = await repository.getPlans();
+  if (plans.length <= 1) {
+    return res.status(409).json({ error: 'last_plan', message: 'O sistema precisa manter ao menos um plano.' });
+  }
+  const plan = await repository.getPlanById(req.params.id);
+  if (!plan) return res.status(404).json({ error: 'not_found', message: 'Plano não encontrado.' });
+
+  const organizations = await repository.getOrganizations();
+  for (const organization of organizations) {
+    if (organization.planTier === plan.id) {
+      return res.status(409).json({ error: 'plan_in_use', message: 'Não é possível excluir um plano contratado por uma organização.' });
+    }
+    const invoices = await repository.getInvoices(organization.id);
+    if (invoices.some(invoice => invoice.planTier === plan.id)) {
+      return res.status(409).json({ error: 'plan_has_invoices', message: 'Não é possível excluir um plano vinculado a faturas.' });
+    }
+  }
+
+  const deleted = await repository.deletePlan(plan.id);
+  if (!deleted) return res.status(404).json({ error: 'not_found', message: 'Plano não encontrado.' });
+  await repository.logAudit({
+    organizationId: req.user!.organizationId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'DELETE_PLAN',
+    resource: 'plans',
+    resourceId: plan.id,
+    details: { name: plan.name },
+    ipAddress: req.ip,
+  });
+  res.json({ success: true });
+});
+
 apiRouter.get('/organizations', requireAuth, async (req: Request, res: Response) => {
   if (req.user!.role === 'platform_admin' || req.user!.role === 'super_admin') {
     return res.json(await repository.getOrganizations());
@@ -204,6 +391,9 @@ apiRouter.get('/organizations', requireAuth, async (req: Request, res: Response)
 });
 
 apiRouter.post('/organizations', requireAuth, requireRole(['platform_admin', 'super_admin']), validateBody(OrganizationSchema), async (req: Request, res: Response) => {
+  if (!await repository.getPlanById(req.body.planTier)) {
+    return res.status(400).json({ error: 'invalid_plan', message: 'Selecione um plano cadastrado.' });
+  }
   await repository.saveOrganization(req.body);
   await repository.logAudit({
     organizationId: req.body.id,
@@ -221,7 +411,19 @@ apiRouter.put('/organizations/:id', requireAuth, requireRole(['platform_admin', 
   if (req.params.id !== req.body.id) {
     return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID da organização.' });
   }
+  if (!await repository.getPlanById(req.body.planTier)) {
+    return res.status(400).json({ error: 'invalid_plan', message: 'Selecione um plano cadastrado.' });
+  }
   await repository.saveOrganization(req.body);
+  await repository.logAudit({
+    organizationId: req.user!.organizationId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'UPDATE_ORGANIZATION',
+    resource: 'organizations',
+    resourceId: req.body.id,
+    ipAddress: req.ip,
+  });
   res.json(req.body);
 });
 
@@ -230,6 +432,15 @@ apiRouter.delete('/organizations/:id', requireAuth, requireRole(['platform_admin
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Organização não encontrada.' });
   }
+  await repository.logAudit({
+    organizationId: req.user!.organizationId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'DELETE_ORGANIZATION',
+    resource: 'organizations',
+    resourceId: req.params.id,
+    ipAddress: req.ip,
+  });
   res.json({ success: true });
 });
 
@@ -247,6 +458,15 @@ apiRouter.post('/drivers', requireAuth, validateBody(DriverSchema), async (req: 
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Motorista já existe em outro tenant.' });
   }
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'CREATE_DRIVER',
+    resource: 'drivers',
+    resourceId: saved.id,
+    ipAddress: req.ip,
+  });
   res.status(201).json(saved);
 });
 
@@ -258,6 +478,15 @@ apiRouter.put('/drivers/:id', requireAuth, validateBody(DriverSchema), async (re
   }
 
   const updated = await repository.saveDriver(req.body as Driver, tenantId);
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'UPDATE_DRIVER',
+    resource: 'drivers',
+    resourceId: updated?.id || req.params.id,
+    ipAddress: req.ip,
+  });
   res.json(updated);
 });
 
@@ -267,10 +496,29 @@ apiRouter.delete('/drivers/:id', requireAuth, async (req: Request, res: Response
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Motorista não encontrado neste tenant.' });
   }
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'DELETE_DRIVER',
+    resource: 'drivers',
+    resourceId: req.params.id,
+    ipAddress: req.ip,
+  });
   res.json({ success: true });
 });
 
-apiRouter.post('/drivers/:id/payout', requireAuth, requireRole(['platform_admin', 'super_admin', 'operator']), (_req: Request, res: Response) => {
+apiRouter.post('/drivers/:id/payout', requireAuth, requireRole(['platform_admin', 'super_admin', 'operator']), async (req: Request, res: Response) => {
+  await repository.logAudit({
+    organizationId: req.user!.organizationId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'DRIVER_PAYOUT_REJECTED',
+    resource: 'driver_payouts',
+    resourceId: req.params.id,
+    details: { reason: 'payment_provider_not_configured' },
+    ipAddress: req.ip,
+  });
   res.status(503).json({
     error: 'payment_provider_not_configured',
     message: 'Repasses PIX não podem ser processados até que um provedor transacional seja integrado.',
@@ -781,7 +1029,38 @@ apiRouter.post('/advertisers', requireAuth, requireRole(['platform_admin', 'supe
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Anunciante já existe em outro tenant.' });
   }
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'CREATE_ADVERTISER',
+    resource: 'advertisers',
+    resourceId: saved.id,
+    ipAddress: req.ip,
+  });
   res.status(201).json(saved);
+});
+
+apiRouter.put('/advertisers/:id', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'fleet_manager']), validateBody(AdvertiserSchema), async (req: Request, res: Response) => {
+  if (req.params.id !== req.body.id) {
+    return res.status(400).json({ error: 'id_mismatch', message: 'O ID da URL deve corresponder ao ID do anunciante.' });
+  }
+  const tenantId = await resolveTenant(req);
+  if (!await repository.getAdvertiserById(req.params.id, tenantId)) {
+    return res.status(404).json({ error: 'not_found', message: 'Anunciante não encontrado neste tenant.' });
+  }
+  const saved = await repository.saveAdvertiser(req.body as AdvertiserAccount, tenantId);
+  if (!saved) return res.status(409).json({ error: 'conflict', message: 'Não foi possível atualizar o anunciante.' });
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'UPDATE_ADVERTISER',
+    resource: 'advertisers',
+    resourceId: saved.id,
+    ipAddress: req.ip,
+  });
+  res.json(saved);
 });
 
 apiRouter.delete('/advertisers/:id', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), async (req: Request, res: Response) => {
@@ -790,6 +1069,15 @@ apiRouter.delete('/advertisers/:id', requireAuth, requireRole(['platform_admin',
   if (!deleted) {
     return res.status(404).json({ error: 'not_found', message: 'Anunciante não encontrado neste tenant.' });
   }
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'DELETE_ADVERTISER',
+    resource: 'advertisers',
+    resourceId: req.params.id,
+    ipAddress: req.ip,
+  });
   res.json({ success: true });
 });
 
@@ -807,6 +1095,27 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
   if (await repository.getInvoiceById(invoice.id, tenantId)) {
     return res.status(409).json({ error: 'invoice_exists', message: 'Já existe uma fatura com este identificador.' });
   }
+  if (invoice.planTier) {
+    const organization = await repository.getOrganizationById(tenantId);
+    const plan = await repository.getPlanById(invoice.planTier);
+    if (!organization || !plan) {
+      return res.status(400).json({ error: 'invalid_plan', message: 'O plano selecionado não está disponível.' });
+    }
+    if (organization.planTier === plan.id) {
+      return res.status(409).json({ error: 'plan_already_active', message: 'Este plano já está ativo na organização.' });
+    }
+    if (plan.maxScreens < organization.activeScreensCount) {
+      return res.status(400).json({ error: 'plan_screen_limit', message: 'O plano selecionado não comporta a quantidade atual de telas.' });
+    }
+    const existingPlanInvoice = (await repository.getInvoices(tenantId)).find(existing =>
+      existing.planTier === plan.id && existing.status !== 'paid',
+    );
+    if (existingPlanInvoice) return res.json(existingPlanInvoice);
+
+    invoice.amount = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+    invoice.screensBilled = organization.activeScreensCount;
+    invoice.organizationName = organization.name;
+  }
   invoice.txid = undefined;
   invoice.pixQrCode = undefined;
   invoice.pixQrCodeUrl = undefined;
@@ -816,6 +1125,16 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
   if (!saved) {
     return res.status(409).json({ error: 'conflict', message: 'Fatura já existe em outro tenant.' });
   }
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'CREATE_INVOICE',
+    resource: 'invoices',
+    resourceId: saved.id,
+    details: { amount: saved.amount, planTier: saved.planTier },
+    ipAddress: req.ip,
+  });
   res.status(201).json(saved);
 });
 
@@ -915,11 +1234,31 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
       const match = matchingInvoices[0];
       if (match) {
         if (paidEvents.has(event.event) && match.invoice.status !== 'paid') {
+          const organization = await repository.getOrganizationById(match.organizationId);
+          if (match.invoice.planTier) {
+            const plan = await repository.getPlanById(match.invoice.planTier);
+            if (!plan || !organization) {
+              return res.status(409).json({ error: 'invoice_plan_unavailable' });
+            }
+            organization.planTier = plan.id;
+            organization.maxScreensLimit = plan.maxScreens;
+            organization.maxCampaignsLimit = plan.maxCampaigns;
+            organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+            organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
+            await repository.saveOrganization(organization);
+          }
           match.invoice.status = 'paid';
           match.invoice.paidAt = payment.paymentDate || payment.clientPaymentDate || new Date().toISOString();
           if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
             return res.status(500).json({ error: 'invoice_update_failed' });
           }
+          await repository.logAudit({
+            organizationId: match.organizationId,
+            action: 'INVOICE_PAYMENT_CONFIRMED',
+            resource: 'invoices',
+            resourceId: match.invoice.id,
+            details: { provider: 'asaas', amount: match.invoice.amount, planTier: match.invoice.planTier },
+          });
         } else if (overdueEvents.has(event.event) && match.invoice.status === 'pending') {
           match.invoice.status = 'overdue';
           if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
@@ -945,9 +1284,8 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
 // 12. AUDIT LOGS
 // ============================================================================
 apiRouter.get('/audit-logs', requireAuth, requireRole(['platform_admin', 'super_admin']), async (req: Request, res: Response) => {
-  const tenantId = await resolveTenant(req);
-  const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 1000);
-  res.json(await repository.getAuditLogs(tenantId, limit));
+  const limit = Math.max(1, Math.min(parseInt(req.query.limit as string, 10) || 100, 1000));
+  res.json(await repository.getAllAuditLogs(limit));
 });
 
 // ============================================================================

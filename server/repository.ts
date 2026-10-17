@@ -12,6 +12,7 @@ import type {
   GeoFence,
   AdvertiserAccount,
   SaaSInvoice,
+  SaaSPlan,
   ProofOfPlayLog,
 } from '../src/types';
 
@@ -84,6 +85,12 @@ export interface VeloRepository {
   getInvoiceById(id: string, orgId: string): Promise<SaaSInvoice | undefined>;
   saveInvoice(invoice: SaaSInvoice, orgId: string): Promise<SaaSInvoice | null>;
 
+  // SaaS Plans
+  getPlans(): Promise<SaaSPlan[]>;
+  getPlanById(id: string): Promise<SaaSPlan | undefined>;
+  savePlan(plan: SaaSPlan): Promise<SaaSPlan | null>;
+  deletePlan(id: string): Promise<boolean>;
+
   // Proof of Play
   getProofOfPlayLogs(orgId: string, limit?: number): Promise<ProofOfPlayLog[]>;
   recordProofOfPlay(log: ProofOfPlayLog, orgId: string): Promise<boolean>;
@@ -107,11 +114,13 @@ export interface VeloRepository {
   // Audit Logs
   logAudit(log: Omit<AuditLog, 'id' | 'createdAt'>): Promise<void>;
   getAuditLogs(orgId: string, limit?: number): Promise<AuditLog[]>;
+  getAllAuditLogs(limit?: number): Promise<AuditLog[]>;
 
   // Sessions
   createSession(session: import('./storage').SessionRecord): Promise<void>;
   getSession(token: string): Promise<import('./storage').SessionRecord | undefined>;
   deleteSession(token: string): Promise<boolean>;
+  deleteSessionsForUser(userId: string): Promise<void>;
 
   // Atomic device security operations
   consumePairingToken(token: string): Promise<PairingTokenRecord | undefined>;
@@ -269,6 +278,19 @@ export class JsonDevelopmentRepository implements VeloRepository {
     return storage.saveInvoice(invoice, orgId);
   }
 
+  async getPlans(): Promise<SaaSPlan[]> {
+    return storage.getPlans();
+  }
+  async getPlanById(id: string): Promise<SaaSPlan | undefined> {
+    return storage.getPlanById(id);
+  }
+  async savePlan(plan: SaaSPlan): Promise<SaaSPlan | null> {
+    return storage.savePlan(plan);
+  }
+  async deletePlan(id: string): Promise<boolean> {
+    return storage.deletePlan(id);
+  }
+
   async getProofOfPlayLogs(orgId: string, limit?: number): Promise<ProofOfPlayLog[]> {
     return storage.getProofOfPlayLogs(orgId, limit);
   }
@@ -310,10 +332,14 @@ export class JsonDevelopmentRepository implements VeloRepository {
   async getAuditLogs(orgId: string, limit?: number): Promise<AuditLog[]> {
     return storage.getAuditLogs(orgId, limit);
   }
+  async getAllAuditLogs(limit?: number): Promise<AuditLog[]> {
+    return storage.getAllAuditLogs(limit);
+  }
 
   async createSession(session: import('./storage').SessionRecord): Promise<void> { storage.createSession(session); }
   async getSession(token: string): Promise<import('./storage').SessionRecord | undefined> { return storage.getSession(token); }
   async deleteSession(token: string): Promise<boolean> { return storage.deleteSession(token); }
+  async deleteSessionsForUser(userId: string): Promise<void> { storage.deleteSessionsForUser(userId); }
   async consumePairingToken(token: string): Promise<PairingTokenRecord | undefined> {
     const record = storage.getPairingToken(token);
     if (record) storage.markPairingTokenUsed(token);

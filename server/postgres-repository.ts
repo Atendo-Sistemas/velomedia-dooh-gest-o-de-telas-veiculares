@@ -3,13 +3,15 @@ import { Pool } from 'pg';
 import type { PoolClient } from 'pg';
 import type {
   SaaSOrganization, SaaSUser, Driver, Device, Campaign, GeoFence,
-  AdvertiserAccount, SaaSInvoice, ProofOfPlayLog,
+  AdvertiserAccount, SaaSInvoice, SaaSPlan, ProofOfPlayLog,
 } from '../src/types';
+import { SAAS_PLANS } from '../src/data/saasPlans';
 import type {
   VeloRepository,
 } from './repository';
 import { projectPublicPlayer } from './public-player';
 import type { PublicPlayerBootstrap } from './public-player';
+import { normalizeAuditLog } from './storage';
 import type {
   AuditLog, DeviceCredentialRecord, PairingTokenRecord, RemoteCommandRecord,
   SessionRecord, WebhookRecord,
@@ -75,6 +77,7 @@ export class PostgresRepository implements VeloRepository {
       client.release();
     }
     if (options.bootstrapAdmin !== false) await this.bootstrapSuperAdmin();
+    await this.ensureDefaultPlans();
   }
 
   async bootstrapSuperAdmin(): Promise<void> {
@@ -186,6 +189,11 @@ export class PostgresRepository implements VeloRepository {
       ? await this.pool.query('DELETE FROM repository_records WHERE kind=$1 AND id=$2 AND organization_id=$3', [kind, id, orgId])
       : await this.pool.query('DELETE FROM repository_records WHERE kind=$1 AND id=$2', [kind, id]);
     return (result.rowCount || 0) > 0;
+  }
+  private async ensureDefaultPlans(): Promise<void> {
+    const existing = await this.list<SaaSPlan>('plan');
+    if (existing.length) return;
+    await Promise.all(SAAS_PLANS.map(plan => this.save('plan', plan)));
   }
   private async findUserByEmail(email: string, client: Pool | PoolClient = this.pool): Promise<(SaaSUser & { passwordHash?: string }) | undefined> {
     const result = await client.query<StoredRow<SaaSUser & { passwordHash?: string }>>(
@@ -321,6 +329,13 @@ export class PostgresRepository implements VeloRepository {
   async getInvoices(orgId: string) { return this.list<SaaSInvoice>('invoice', orgId); }
   async getInvoiceById(id: string, orgId: string) { return this.byId<SaaSInvoice>('invoice', id, orgId); }
   async saveInvoice(v: SaaSInvoice, orgId: string) { const item = { ...v, organizationId: orgId }; return await this.save('invoice', item, orgId) ? item : null; }
+  async getPlans() {
+    await this.ensureDefaultPlans();
+    return this.list<SaaSPlan>('plan');
+  }
+  async getPlanById(id: string) { return this.byId<SaaSPlan>('plan', id); }
+  async savePlan(plan: SaaSPlan) { return await this.save('plan', plan) ? plan : null; }
+  async deletePlan(id: string) { return this.remove('plan', id); }
 
   async getProofOfPlayLogs(orgId: string, limit = 100) {
     const result = await this.pool.query<StoredRow<ProofOfPlayLog>>(
@@ -500,7 +515,7 @@ export class PostgresRepository implements VeloRepository {
     return (result.rowCount || 0) > 0;
   }
   async logAudit(log: Omit<AuditLog, 'id' | 'createdAt'>) {
-    const item: AuditLog = { ...log, id: `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, createdAt: new Date().toISOString() };
+    const item = normalizeAuditLog({ ...log, id: `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, createdAt: new Date().toISOString() });
     await this.save('audit', item, item.organizationId);
   }
   async getAuditLogs(orgId: string, limit = 100) {
@@ -509,7 +524,15 @@ export class PostgresRepository implements VeloRepository {
        ORDER BY created_at DESC LIMIT $2`,
       [orgId, Math.max(0, Math.floor(limit))],
     );
-    return result.rows.map(row => row.payload);
+    return result.rows.map(row => normalizeAuditLog(row.payload));
+  }
+  async getAllAuditLogs(limit = 100) {
+    const result = await this.pool.query<StoredRow<AuditLog>>(
+      `SELECT payload FROM repository_records WHERE kind='audit'
+       ORDER BY created_at DESC LIMIT $1`,
+      [Math.max(0, Math.floor(limit))],
+    );
+    return result.rows.map(row => normalizeAuditLog(row.payload));
   }
 
   async createSession(session: SessionRecord) {
@@ -526,5 +549,6 @@ export class PostgresRepository implements VeloRepository {
     return row ? { ...row, expiresAt: Number(row.expiresAt), createdAt: new Date(row.createdAt).toISOString() } : undefined;
   }
   async deleteSession(token: string) { const result = await this.pool.query('DELETE FROM sessions WHERE token=$1', [token]); return Boolean(result.rowCount); }
+  async deleteSessionsForUser(userId: string) { await this.pool.query('DELETE FROM sessions WHERE user_id=$1', [userId]); }
   async close() { await this.pool.end(); }
 }

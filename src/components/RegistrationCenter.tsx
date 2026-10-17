@@ -211,6 +211,7 @@ interface RegistrationCenterProps {
   organizations: SaaSOrganization[];
   plans: SaaSPlan[];
   currentOrg: SaaSOrganization;
+  canManageUsers: boolean;
   onSaveDriver: (driver: Driver) => void;
   onUpdateDriver: (driver: Driver) => void;
   onDeleteDriver: (driverId: string) => void;
@@ -220,8 +221,8 @@ interface RegistrationCenterProps {
   onSaveAdvertiser: (advertiser: AdvertiserAccount) => void;
   onUpdateAdvertiser: (advertiser: AdvertiserAccount) => void;
   onDeleteAdvertiser: (advertiserId: string) => void;
-  onSaveSaaSUser: (user: SaaSUser) => void;
-  onUpdateSaaSUser: (user: SaaSUser) => void;
+  onSaveSaaSUser: (user: SaaSUser, password: string) => Promise<void>;
+  onUpdateSaaSUser: (user: SaaSUser, password?: string) => Promise<void>;
   onDeleteSaaSUser: (userId: string) => void;
   onSaveOrg: (org: SaaSOrganization) => void;
   onUpdateOrg: (org: SaaSOrganization) => void;
@@ -238,6 +239,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
   organizations,
   plans,
   currentOrg,
+  canManageUsers,
   onSaveDriver,
   onUpdateDriver,
   onDeleteDriver,
@@ -256,7 +258,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
   onLaunchPlayerForDevice,
   initialTab = 'drivers'
 }) => {
-  const [activeTab, setActiveTab] = useState<'drivers' | 'devices' | 'advertisers' | 'users' | 'franchises'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'drivers' | 'devices' | 'advertisers' | 'users' | 'franchises'>(canManageUsers || initialTab !== 'users' ? initialTab : 'drivers');
   const [searchTerm, setSearchTerm] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -351,6 +353,8 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
   const [userPhone, setUserPhone] = useState('');
   const [userRole, setUserRole] = useState<SaaSUserRole>('fleet_manager');
   const [userOrgId, setUserOrgId] = useState<string>(currentOrg.id);
+  const [userPassword, setUserPassword] = useState('');
+  const [userFormError, setUserFormError] = useState<string | null>(null);
 
   // Franchise Form State
   const [orgName, setOrgName] = useState('');
@@ -526,6 +530,8 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
     setUserPhone('');
     setUserRole('fleet_manager');
     setUserOrgId(currentOrg.id);
+    setUserPassword('');
+    setUserFormError(null);
     setShowUserModal(true);
   };
 
@@ -536,6 +542,8 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
     setUserPhone(user.phone);
     setUserRole(user.role);
     setUserOrgId(user.organizationId);
+    setUserPassword('');
+    setUserFormError(null);
     setShowUserModal(true);
   };
 
@@ -819,13 +827,22 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
     setShowAdvertiserModal(false);
   };
 
-  const handleSaveUserForm = (e: React.FormEvent) => {
+  const handleSaveUserForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userName || !userEmail) return;
+    if (!editingUser && userPassword.length < 16) {
+      setUserFormError('Defina uma senha inicial com pelo menos 16 caracteres.');
+      return;
+    }
+    if (editingUser && userPassword && userPassword.length < 16) {
+      setUserFormError('A nova senha deve ter pelo menos 16 caracteres.');
+      return;
+    }
 
     const targetOrg = organizations.find(o => o.id === userOrgId) || currentOrg;
 
-    if (editingUser) {
+    try {
+      if (editingUser) {
       const updated: SaaSUser = {
         ...editingUser,
         name: userName,
@@ -835,9 +852,9 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
         organizationId: targetOrg.id,
         organizationName: targetOrg.name,
       };
-      onUpdateSaaSUser(updated);
+      await onUpdateSaaSUser(updated, userPassword || undefined);
       showToast(`Usuário ${userName} atualizado com sucesso!`);
-    } else {
+      } else {
       const newUser: SaaSUser = {
         id: `usr_${Date.now()}`,
         name: userName,
@@ -852,9 +869,13 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
         lastLogin: 'Recém convidado',
         permissions: userRole === 'super_admin' ? ['all_access'] : ['manage_devices', 'manage_drivers', 'view_reports']
       };
-      onSaveSaaSUser(newUser);
+      await onSaveSaaSUser(newUser, userPassword);
       confetti({ particleCount: 50, spread: 60 });
       showToast(`Usuário ${userName} cadastrado na equipe de ${targetOrg.name}!`);
+      }
+    } catch (error) {
+      setUserFormError(error instanceof Error ? error.message : 'Não foi possível salvar o usuário.');
+      return;
     }
 
     setShowUserModal(false);
@@ -1067,6 +1088,8 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
           <span className="text-[10px] text-purple-400/90 font-medium">Empresas Parceiras</span>
         </button>
 
+        {canManageUsers && (
+        <>
         {/* Card 4: Usuários SaaS */}
         <button
           onClick={() => setActiveTab('users')}
@@ -1083,6 +1106,8 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
           <div className="text-xl font-bold text-white font-mono mt-1">{totalUsers}</div>
           <span className="text-[10px] text-indigo-400/90 font-medium">Operadores RBAC</span>
         </button>
+        </>
+        )}
 
         {/* Card 5: Franquias */}
         <button
@@ -1138,7 +1163,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
             <span>Anunciantes ({totalAdvertisers})</span>
           </button>
 
-          <button
+          {canManageUsers && <button
             onClick={() => { setActiveTab('users'); setSearchTerm(''); }}
             className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 whitespace-nowrap transition ${
               activeTab === 'users' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
@@ -1146,7 +1171,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
           >
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>Usuários SaaS ({totalUsers})</span>
-          </button>
+          </button>}
 
           <button
             onClick={() => { setActiveTab('franchises'); setSearchTerm(''); }}
@@ -1891,6 +1916,7 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-500"
                   />
                 </div>
+
                 <div>
                   <label className="block text-slate-400 font-medium mb-1">WhatsApp / Telefone *</label>
                   <input
@@ -2637,6 +2663,25 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-slate-400 font-medium mb-1">
+                  {editingUser ? 'Nova senha (opcional)' : 'Senha inicial *'}
+                </label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  required={!editingUser}
+                  minLength={16}
+                  maxLength={256}
+                  value={userPassword}
+                  onChange={event => setUserPassword(event.target.value)}
+                  placeholder="Mínimo de 16 caracteres"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:border-indigo-500"
+                />
+                {editingUser && <span className="mt-1 block text-[10px] text-slate-500">Deixe em branco para manter a senha atual.</span>}
+              </div>
+              {userFormError && <p role="alert" className="rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">{userFormError}</p>}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>

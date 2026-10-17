@@ -28,29 +28,34 @@ import {
   SlidersHorizontal,
   FileSpreadsheet
 } from 'lucide-react';
-import { SaaSOrganization, SaaSPlan, SaaSPlanTier, SaaSInvoice } from '../types';
+import { SaaSOrganization, SaaSPlan, SaaSPlanTier } from '../types';
+import { SystemLogsPanel } from './SystemLogsPanel';
 
 interface SaaSMasterAdminProps {
   organizations: SaaSOrganization[];
   plans: SaaSPlan[];
-  invoices: SaaSInvoice[];
   currentOrg: SaaSOrganization;
   onSelectOrg: (org: SaaSOrganization) => void;
   onUpdateOrg: (org: SaaSOrganization) => void;
   onCreateOrg: (org: SaaSOrganization) => void;
   onDeleteOrg: (orgId: string) => void;
+  onSavePlan: (plan: SaaSPlan) => Promise<void>;
+  onDeletePlan: (planId: string) => Promise<void>;
+  onChangeSuperAdminPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onExitMasterMode: () => void;
 }
 
 export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
   organizations,
   plans,
-  invoices,
   currentOrg,
   onSelectOrg,
   onUpdateOrg,
   onCreateOrg,
   onDeleteOrg,
+  onSavePlan,
+  onDeletePlan,
+  onChangeSuperAdminPassword,
   onExitMasterMode,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -58,6 +63,21 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
   const [planFilter, setPlanFilter] = useState<string>('all');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingOrg, setEditingOrg] = useState<SaaSOrganization | null>(null);
+  const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<SaaSPlan | null>(null);
+  const [planName, setPlanName] = useState('');
+  const [planPricePerScreen, setPlanPricePerScreen] = useState(0);
+  const [planBaseFee, setPlanBaseFee] = useState(0);
+  const [planMaxScreens, setPlanMaxScreens] = useState(5);
+  const [planMaxCampaigns, setPlanMaxCampaigns] = useState(10);
+  const [planFeatures, setPlanFeatures] = useState('');
+  const [planRecommended, setPlanRecommended] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Form states for new/edit company
   const [formName, setFormName] = useState('');
@@ -161,6 +181,79 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
         monthlySoftwareCost: monthlyCost,
         status: formStatus,
         customDomain: formCustomDomain.trim() || undefined,
+      };
+
+      const openPlanModal = (plan?: SaaSPlan) => {
+        setEditingPlan(plan || null);
+        setPlanName(plan?.name || '');
+        setPlanPricePerScreen(plan?.pricePerScreenMonth || 0);
+        setPlanBaseFee(plan?.baseMonthlyFee || 0);
+        setPlanMaxScreens(plan?.maxScreens || 5);
+        setPlanMaxCampaigns(plan?.maxCampaigns || 10);
+        setPlanFeatures(plan?.features.join('\n') || '');
+        setPlanRecommended(plan?.recommended || false);
+        setPlanError(null);
+        setIsPlanModalOpen(true);
+      };
+
+      const handleSavePlan = async (event: React.FormEvent) => {
+        event.preventDefault();
+        const id = editingPlan?.id || planName.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        if (!id || (!editingPlan && plans.some(plan => plan.id === id))) {
+          setPlanError('Já existe um plano com esse nome. Escolha outro nome.');
+          return;
+        }
+
+        try {
+          await onSavePlan({
+            id,
+            name: planName.trim(),
+            pricePerScreenMonth: Number(planPricePerScreen),
+            baseMonthlyFee: Number(planBaseFee),
+            maxScreens: Number(planMaxScreens),
+            maxCampaigns: Number(planMaxCampaigns),
+            features: planFeatures.split('\n').map(feature => feature.trim()).filter(Boolean),
+            recommended: planRecommended,
+          });
+          setIsPlanModalOpen(false);
+        } catch (error) {
+          setPlanError(error instanceof Error ? error.message : 'Não foi possível salvar o plano.');
+        }
+      };
+
+      const handleDeletePlan = async (plan: SaaSPlan) => {
+        if (!window.confirm(`Excluir o plano ${plan.name}?`)) return;
+        setPlanError(null);
+        try {
+          await onDeletePlan(plan.id);
+        } catch (error) {
+          setPlanError(error instanceof Error ? error.message : 'Não foi possível excluir o plano.');
+        }
+      };
+
+      const handleChangePassword = async (event: React.FormEvent) => {
+        event.preventDefault();
+        setPasswordError(null);
+        if (newPassword.length < 16) {
+          setPasswordError('A nova senha deve ter pelo menos 16 caracteres.');
+          return;
+        }
+        if (newPassword !== confirmPassword) {
+          setPasswordError('A confirmação da senha não corresponde.');
+          return;
+        }
+        setIsChangingPassword(true);
+        try {
+          await onChangeSuperAdminPassword(currentPassword, newPassword);
+          setCurrentPassword('');
+          setNewPassword('');
+          setConfirmPassword('');
+        } catch (error) {
+          setPasswordError(error instanceof Error ? error.message : 'Não foi possível alterar a senha.');
+        } finally {
+          setIsChangingPassword(false);
+        }
       };
       onUpdateOrg(updated);
     } else {
@@ -332,12 +425,55 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
             className="bg-slate-900 text-slate-300 border border-slate-700 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
           >
             <option value="all">Todos os Planos</option>
-            <option value="starter">Starter DOOH</option>
-            <option value="pro_fleet">Pro Fleet Network</option>
-            <option value="enterprise_network">Enterprise Franchise</option>
+            {plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
           </select>
         </div>
       </div>
+
+      <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-5 shadow-xl">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">Planos SaaS</h2>
+            <p className="mt-1 text-xs text-slate-400">Configure preços e limites. As opções existentes continuam disponíveis para edição.</p>
+          </div>
+          <button onClick={() => openPlanModal()} className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-500">
+            <Plus className="h-4 w-4" /> Criar plano
+          </button>
+        </div>
+        {planError && <div className="rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200" role="alert">{planError}</div>}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {plans.map(plan => (
+            <article key={plan.id} className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-white">{plan.name}</h3>
+                  <p className="mt-1 text-[11px] text-slate-400">{plan.maxScreens} telas · {plan.maxCampaigns} campanhas</p>
+                </div>
+                {plan.recommended && <span className="rounded-full bg-cyan-500/15 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300">Recomendado</span>}
+              </div>
+              <p className="mt-3 text-sm font-mono text-emerald-300">R$ {plan.baseMonthlyFee.toFixed(2)} + R$ {plan.pricePerScreenMonth.toFixed(2)}/tela</p>
+              <div className="mt-4 flex justify-end gap-2 border-t border-slate-800 pt-3">
+                <button onClick={() => openPlanModal(plan)} className="rounded-lg border border-slate-700 p-2 text-slate-300 hover:bg-slate-800" aria-label={`Editar ${plan.name}`}><Edit3 className="h-4 w-4" /></button>
+                <button onClick={() => void handleDeletePlan(plan)} className="rounded-lg border border-rose-500/30 p-2 text-rose-300 hover:bg-rose-950/50" aria-label={`Excluir ${plan.name}`}><Trash2 className="h-4 w-4" /></button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      <SystemLogsPanel />
+      <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
+        <h2 className="flex items-center gap-2 text-lg font-bold text-white"><Lock className="h-5 w-5 text-cyan-400" /> Segurança do superusuário</h2>
+        <p className="mt-1 text-xs text-slate-400">Altere sua senha de acesso. A senha será armazenada com hash e todas as sessões serão encerradas após a alteração.</p>
+        {passwordError && <p role="alert" className="mt-4 rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">{passwordError}</p>}
+        <form onSubmit={handleChangePassword} className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <input required type="password" autoComplete="current-password" minLength={1} maxLength={256} value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} placeholder="Senha atual" aria-label="Senha atual" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white" />
+          <input required type="password" autoComplete="new-password" minLength={16} maxLength={256} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="Nova senha (mínimo 16 caracteres)" aria-label="Nova senha" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white" />
+          <div className="flex gap-2">
+            <input required type="password" autoComplete="new-password" minLength={16} maxLength={256} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} placeholder="Confirmar nova senha" aria-label="Confirmar nova senha" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white" />
+            <button disabled={isChangingPassword} type="submit" className="shrink-0 rounded-xl bg-cyan-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-50">{isChangingPassword ? 'Salvando…' : 'Alterar'}</button>
+          </div>
+        </form>
+      </section>
 
       {/* Companies List / Grid */}
       <div className="grid grid-cols-1 gap-4">
@@ -619,9 +755,7 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
                     onChange={(e) => setFormPlan(e.target.value as SaaSPlanTier)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
                   >
-                    <option value="starter">Starter DOOH (R$ 49/tela)</option>
-                    <option value="pro_fleet">Pro Fleet Network (R$ 39/tela)</option>
-                    <option value="enterprise_network">Enterprise Franchise (R$ 29/tela)</option>
+                    {plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name} (R$ {plan.pricePerScreenMonth}/tela)</option>)}
                   </select>
                 </div>
               </div>
@@ -759,6 +893,31 @@ export const SaaSMasterAdmin: React.FC<SaaSMasterAdminProps> = ({
 
             </form>
           </div>
+        </div>
+      )}
+
+      {isPlanModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-sm">
+          <form onSubmit={handleSavePlan} className="max-h-[90vh] w-full max-w-xl space-y-4 overflow-y-auto rounded-3xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">{editingPlan ? 'Editar plano' : 'Criar plano'}</h3>
+              <button type="button" onClick={() => setIsPlanModalOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Fechar"><X className="h-5 w-5" /></button>
+            </div>
+            {planError && <p className="rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200" role="alert">{planError}</p>}
+            <label className="block text-xs font-semibold text-slate-300">Nome do plano<input required maxLength={80} value={planName} onChange={event => setPlanName(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" /></label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs font-semibold text-slate-300">Preço por tela/mês<input required type="number" min="0" step="0.01" value={planPricePerScreen} onChange={event => setPlanPricePerScreen(Number(event.target.value))} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" /></label>
+              <label className="text-xs font-semibold text-slate-300">Taxa base/mês<input required type="number" min="0" step="0.01" value={planBaseFee} onChange={event => setPlanBaseFee(Number(event.target.value))} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" /></label>
+              <label className="text-xs font-semibold text-slate-300">Máximo de telas<input required type="number" min="1" step="1" value={planMaxScreens} onChange={event => setPlanMaxScreens(Number(event.target.value))} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" /></label>
+              <label className="text-xs font-semibold text-slate-300">Máximo de campanhas<input required type="number" min="1" step="1" value={planMaxCampaigns} onChange={event => setPlanMaxCampaigns(Number(event.target.value))} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" /></label>
+            </div>
+            <label className="block text-xs font-semibold text-slate-300">Recursos (um por linha)<textarea rows={5} value={planFeatures} onChange={event => setPlanFeatures(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" /></label>
+            <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={planRecommended} onChange={event => setPlanRecommended(event.target.checked)} /> Destacar como recomendado</label>
+            <div className="flex justify-end gap-2 border-t border-slate-800 pt-4">
+              <button type="button" onClick={() => setIsPlanModalOpen(false)} className="rounded-xl bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300">Cancelar</button>
+              <button type="submit" className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-500">Salvar plano</button>
+            </div>
+          </form>
         </div>
       )}
 

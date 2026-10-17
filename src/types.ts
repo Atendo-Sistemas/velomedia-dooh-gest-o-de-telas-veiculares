@@ -2,7 +2,7 @@ export type DeviceStatus = 'online' | 'standby' | 'offline' | 'maintenance' | 'r
 export type ScreenPosition = 'headrest_left' | 'headrest_right' | 'center_console' | 'dashboard' | 'front_dash';
 export type CreativeType = 'video' | 'interactive_banner' | 'qr_coupon' | 'mini_survey';
 export type CampaignCategory = 'food_beverage' | 'tech_finance' | 'retail' | 'automotive' | 'entertainment' | 'health';
-export type SaaSPlanTier = 'starter' | 'pro_fleet' | 'enterprise_network';
+export type SaaSPlanTier = string;
 
 export interface SaaSPlan {
   id: SaaSPlanTier;
@@ -60,6 +60,7 @@ export interface SaaSInvoice {
   invoiceNumber: string;
   organizationId?: string;
   organizationName?: string;
+  planTier?: SaaSPlanTier;
   month?: string;
   issueDate: string;
   dueDate: string;
@@ -74,6 +75,19 @@ export interface SaaSInvoice {
   txid?: string;
   pixQrCodeExpiresAt?: string;
   paidAt?: string;
+}
+
+export interface SystemAuditLog {
+  id: string;
+  organizationId: string;
+  userId?: string;
+  userEmail?: string;
+  action: string;
+  resource: string;
+  resourceId?: string;
+  details?: Record<string, unknown>;
+  ipAddress?: string;
+  createdAt: string;
 }
 
 export interface AdvertiserClientPortal {

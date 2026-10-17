@@ -22,35 +22,33 @@ import {
   AlertCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { SaaSPlan, SaaSOrganization, SaaSInvoice, AdvertiserClientPortal, SaaSPlanTier } from '../types';
-import { SAAS_PLANS, INITIAL_ADVERTISER_PORTALS } from '../data/mockData';
+import { SaaSPlan, SaaSOrganization, SaaSInvoice, AdvertiserAccount } from '../types';
 import { apiClient } from '../services/apiClient';
 
 interface SaaSBillingManagerProps {
   currentOrg: SaaSOrganization;
-  onUpdateOrg: (updatedOrg: SaaSOrganization) => void;
   onSwitchOrg: (orgId: string) => void;
   organizations: SaaSOrganization[];
+  plans: SaaSPlan[];
+  advertisers: AdvertiserAccount[];
+  onManageClients: () => void;
 }
 
 export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
   currentOrg,
-  onUpdateOrg,
   onSwitchOrg,
   organizations,
+  plans,
+  advertisers,
+  onManageClients,
 }) => {
   const [invoices, setInvoices] = useState<SaaSInvoice[]>([]);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
   const [isCreatingPix, setIsCreatingPix] = useState(false);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
-  const [advertisers, setAdvertisers] = useState<AdvertiserClientPortal[]>(INITIAL_ADVERTISER_PORTALS);
-  const [selectedPlanTier, setSelectedPlanTier] = useState<SaaSPlanTier>(currentOrg.planTier);
   const [showPixModal, setShowPixModal] = useState<SaaSInvoice | null>(null);
-  const [showNewAdvertiserModal, setShowNewAdvertiserModal] = useState(false);
-  const [newAdvName, setNewAdvName] = useState('');
-  const [newAdvContact, setNewAdvContact] = useState('');
-  const [newAdvEmail, setNewAdvEmail] = useState('');
-  const [newAdvBudget, setNewAdvBudget] = useState(5000);
+  const [isCreatingPlanInvoice, setIsCreatingPlanInvoice] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -72,19 +70,37 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
   }, []);
 
   // Upgrade Plan handler
-  const handleUpgradePlan = (plan: SaaSPlan) => {
-    setSelectedPlanTier(plan.id);
-    const updated: SaaSOrganization = {
-      ...currentOrg,
-      planTier: plan.id,
-      maxScreensLimit: plan.maxScreens,
-      monthlySoftwareCost: plan.baseMonthlyFee + (currentOrg.activeScreensCount * plan.pricePerScreenMonth),
-      netProfit: currentOrg.estimatedGrossAdRevenue - currentOrg.driverPayoutTotal - (plan.baseMonthlyFee + (currentOrg.activeScreensCount * plan.pricePerScreenMonth)),
-    };
-    onUpdateOrg(updated);
-    confetti({ particleCount: 50, spread: 70, origin: { y: 0.6 } });
-    setToastMessage(`Plano da organização alterado para ${plan.name}!`);
-    setTimeout(() => setToastMessage(null), 3500);
+  const handleUpgradePlan = async (plan: SaaSPlan) => {
+    if (isCreatingPlanInvoice) return;
+    setIsCreatingPlanInvoice(true);
+    setPlanError(null);
+    const now = new Date();
+    const issueDate = now.toISOString().slice(0, 10);
+    const dueDate = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const id = crypto.randomUUID();
+    try {
+      const invoice = await apiClient.createInvoice({
+        id: `inv_${id}`,
+        invoiceNumber: `INV-${issueDate.replaceAll('-', '')}-${id.slice(0, 8).toUpperCase()}`,
+        organizationId: currentOrg.id,
+        organizationName: currentOrg.name,
+        month: issueDate.slice(0, 7),
+        issueDate,
+        dueDate,
+        amount: 0,
+        status: 'pending',
+        screensBilled: currentOrg.activeScreensCount,
+        paymentMethod: 'pix',
+        planTier: plan.id,
+      });
+      setInvoices(current => [invoice, ...current.filter(existing => existing.id !== invoice.id)]);
+      setToastMessage(`Fatura de ${plan.name} criada. O plano será ativado após a confirmação do pagamento.`);
+      setTimeout(() => setToastMessage(null), 4500);
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : 'Não foi possível criar a fatura do plano.');
+    } finally {
+      setIsCreatingPlanInvoice(false);
+    }
   };
 
   const handleGeneratePix = async (invoice: SaaSInvoice) => {
@@ -109,40 +125,12 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
     }
   };
 
-  // Add new advertiser portal
-  const handleCreateAdvertiser = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAdvName || !newAdvEmail) return;
-
-    const newAdv: AdvertiserClientPortal = {
-      id: `adv_${Date.now()}`,
-      companyName: newAdvName,
-      contactName: newAdvContact || 'Responsável de Mídia',
-      email: newAdvEmail,
-      activeCampaignsCount: 1,
-      totalBudgetManaged: Number(newAdvBudget),
-      totalImpressionsDelivered: 0,
-      portalAccessCode: `${newAdvName.slice(0, 4).toUpperCase()}-DOOH-${Math.floor(1000 + Math.random() * 9000)}`,
-      status: 'active',
-    };
-
-    setAdvertisers([newAdv, ...advertisers]);
-    setShowNewAdvertiserModal(false);
-    setNewAdvName('');
-    setNewAdvContact('');
-    setNewAdvEmail('');
-    confetti({ particleCount: 40 });
-    setToastMessage(`Acesso do anunciante ${newAdv.companyName} criado!`);
-    setTimeout(() => setToastMessage(null), 3500);
-  };
-
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopiedCode(label);
     setTimeout(() => setCopiedCode(null), 2500);
   };
 
-  const currentPlan = SAAS_PLANS.find(p => p.id === currentOrg.planTier) || SAAS_PLANS[1];
   const screenUsagePercent = Math.min(100, Math.round((currentOrg.activeScreensCount / currentOrg.maxScreensLimit) * 100));
 
   return (
@@ -277,7 +265,8 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {SAAS_PLANS.map((plan) => {
+          {planError && <div className="md:col-span-3 rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200" role="alert">{planError}</div>}
+          {plans.map((plan) => {
             const isCurrent = currentOrg.planTier === plan.id;
             return (
               <div
@@ -331,15 +320,15 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
 
                 <div className="pt-6 mt-6 border-t border-slate-800">
                   <button
-                    disabled={isCurrent}
-                    onClick={() => handleUpgradePlan(plan)}
+                    disabled={isCurrent || isCreatingPlanInvoice}
+                    onClick={() => void handleUpgradePlan(plan)}
                     className={`w-full py-3 rounded-xl font-bold text-xs transition shadow ${
-                      isCurrent
+                      isCurrent || isCreatingPlanInvoice
                         ? 'bg-slate-800 text-slate-400 cursor-default border border-slate-700'
                         : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 hover:shadow-cyan-500/20'
                     }`}
                   >
-                    {isCurrent ? 'Plano Ativo na Frota' : `Mudar para ${plan.name}`}
+                    {isCurrent ? 'Plano Ativo na Frota' : isCreatingPlanInvoice ? 'Criando fatura…' : `Contratar ${plan.name}`}
                   </button>
                 </div>
               </div>
@@ -348,78 +337,43 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
         </div>
       </div>
 
-      {/* Advertiser Client Portal & White-Label Access Management */}
+      {/* Registered advertiser clients, persisted through the registration center */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center space-x-2">
               <Users className="w-5 h-5 text-indigo-400" />
-              <h2 className="text-lg font-bold text-white tracking-tight">Portal do Anunciante White-Label</h2>
+              <h2 className="text-lg font-bold text-white tracking-tight">Clientes anunciantes</h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Permita que seus clientes acompanhem as veiculações de suas campanhas e relatórios de Proof-of-Play com link exclusivo.
+              Os cadastros são compartilhados com a central de registros e persistidos por organização.
             </p>
           </div>
 
           <button
-            onClick={() => setShowNewAdvertiserModal(true)}
+            onClick={onManageClients}
             className="flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md transition"
           >
             <Plus className="w-4 h-4" />
-            <span>Convidar Novo Anunciante</span>
+            <span>Gerenciar clientes</span>
           </button>
         </div>
 
-        {/* Advertisers List Table */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {advertisers.map((adv) => (
-            <div key={adv.id} className="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 space-y-4 hover:border-slate-700 transition">
-              <div className="flex items-center justify-between">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {advertisers.map(advertiser => (
+            <article key={advertiser.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-bold text-white text-sm">{adv.companyName}</h3>
-                  <span className="text-[11px] text-slate-400">{adv.contactName}</span>
+                  <h3 className="text-sm font-bold text-white">{advertiser.companyName}</h3>
+                  <p className="mt-1 text-[11px] text-slate-400">{advertiser.contactName} · {advertiser.email}</p>
                 </div>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  {adv.status === 'active' ? 'Ativo' : 'Pendente'}
-                </span>
+                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">{advertiser.status}</span>
               </div>
-
-              <div className="space-y-1.5 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Campanhas na Frota:</span>
-                  <span className="font-bold text-white">{adv.activeCampaignsCount}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Verba sob Gestão:</span>
-                  <span className="font-bold text-emerald-400 font-mono">
-                    R$ {adv.totalBudgetManaged.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Impactos Entregues:</span>
-                  <span className="font-bold text-cyan-300 font-mono">
-                    {adv.totalImpressionsDelivered.toLocaleString('pt-BR')}
-                  </span>
-                </div>
-              </div>
-
-              {/* Portal Access Link / Token Box */}
-              <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Código do Portal</span>
-                  <span className="font-mono font-bold text-indigo-300 text-[11px]">{adv.portalAccessCode}</span>
-                </div>
-                <button
-                  onClick={() => copyToClipboard(`https://ais-dev.run.app/portal?code=${adv.portalAccessCode}`, adv.id)}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-semibold flex items-center space-x-1"
-                  title="Copiar Link Seguro do Anunciante"
-                >
-                  <Copy className="w-3 h-3" />
-                  <span>{copiedCode === adv.id ? 'Copiado!' : 'Copiar Link'}</span>
-                </button>
-              </div>
-            </div>
+              <p className="mt-3 text-xs text-slate-400">{advertiser.activeCampaignsCount} campanhas · Saldo R$ {advertiser.currentBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+              <p className="mt-2 font-mono text-[10px] text-indigo-300">Portal: {advertiser.portalAccessCode}</p>
+            </article>
           ))}
+          {advertisers.length === 0 && <p className="text-xs text-slate-400">Nenhum cliente cadastrado para esta organização.</p>}
         </div>
       </div>
 
@@ -530,6 +484,7 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
               <h2 className="text-lg font-bold text-white">Pagamento Instantâneo via PIX</h2>
               <p className="text-xs text-slate-400 mt-1">
                 Fatura {showPixModal.invoiceNumber} • {showPixModal.screensBilled} telas veiculares
+                {showPixModal.planTier && ` • ${plans.find(plan => plan.id === showPixModal.planTier)?.name || showPixModal.planTier}`}
               </p>
             </div>
 
@@ -599,82 +554,6 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
             <p className="text-[11px] text-slate-400">
               A fatura só muda para paga após a confirmação enviada pelo Asaas.
             </p>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: Invite New Advertiser */}
-      {showNewAdvertiserModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl relative text-slate-200">
-            <h2 className="text-lg font-bold text-white">Cadastrar Anunciante no Portal White-Label</h2>
-            <p className="text-xs text-slate-400">
-              Gere um link seguro com login tokenizado para o cliente acompanhar impressões e campanhas em tempo real.
-            </p>
-
-            <form onSubmit={handleCreateAdvertiser} className="space-y-3 pt-2 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Empresa / Marca:</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: McDonald's, Coca-Cola, Localiza"
-                  value={newAdvName}
-                  onChange={(e) => setNewAdvName(e.target.value)}
-                  className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-400"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Nome do Contato:</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Mariana Silva"
-                    value={newAdvContact}
-                    onChange={(e) => setNewAdvContact(e.target.value)}
-                    className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">E-mail do Responsável:</label>
-                  <input
-                    type="email"
-                    required
-                    placeholder="midia@empresa.com.br"
-                    value={newAdvEmail}
-                    onChange={(e) => setNewAdvEmail(e.target.value)}
-                    className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-400"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Verba Contratada Estimada (R$):</label>
-                <input
-                  type="number"
-                  value={newAdvBudget}
-                  onChange={(e) => setNewAdvBudget(Number(e.target.value))}
-                  className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-400"
-                />
-              </div>
-
-              <div className="flex items-center justify-end space-x-2 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowNewAdvertiserModal(false)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-semibold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-md"
-                >
-                  Criar Acesso Anunciante
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
