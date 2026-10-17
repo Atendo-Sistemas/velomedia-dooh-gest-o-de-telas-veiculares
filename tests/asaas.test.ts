@@ -126,6 +126,48 @@ describe('Asaas PIX gateway', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('uses an advertiser-specific Asaas customer reference for advertiser invoices', async () => {
+    configureAsaas();
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v3/customers') {
+        expect(url.searchParams.get('externalReference')).toBe('advertiser:org-1:adv-1');
+        return jsonResponse({ data: [{ id: 'cus_adv', externalReference: 'advertiser:org-1:adv-1' }] });
+      }
+      if (url.pathname === '/v3/payments' && !init?.method) return jsonResponse({ data: [] });
+      if (url.pathname === '/v3/payments' && init?.method === 'POST') {
+        const payment = JSON.parse(String(init.body));
+        expect(payment).toMatchObject({
+          customer: 'cus_adv',
+          externalReference: 'invoice:adv-inv-1',
+          value: 250,
+        });
+        return jsonResponse({ id: 'pay_adv' });
+      }
+      if (url.pathname === '/v3/payments/pay_adv/pixQrCode') {
+        return jsonResponse({ payload: 'advertiser-pix', encodedImage: 'aW1hZ2U=' });
+      }
+      throw new Error(`Unexpected Asaas URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new VeloPixGatewayAdapter().createPixCharge({
+      invoiceId: 'adv-inv-1',
+      organizationId: 'org-1',
+      customerReference: 'advertiser:org-1:adv-1',
+      organizationName: 'Advertiser',
+      amount: 250,
+      dueDate: '2026-10-20',
+      description: 'Advertiser media credit',
+      cnpj: '12345678000195',
+      email: 'billing@advertiser.example',
+      phone: '(11) 99999-0000',
+    });
+
+    expect(result.status).toBe('created');
+    expect(result.txid).toBe('pay_adv');
+  });
+
   it('rejects webhook tokens that do not match the configured Asaas token', () => {
     configureAsaas();
     const gateway = new VeloPixGatewayAdapter();

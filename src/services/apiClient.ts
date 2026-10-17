@@ -266,6 +266,12 @@ export const apiClient = {
   async createInvoice(invoice: SaaSInvoice): Promise<SaaSInvoice> {
     return request<SaaSInvoice>('/invoices', { method: 'POST', body: JSON.stringify(invoice) });
   },
+  async createAdvertiserInvoice(advertiserId: string, amount: number): Promise<SaaSInvoice> {
+    return request<SaaSInvoice>(`/advertisers/${encodeURIComponent(advertiserId)}/invoices`, {
+      method: 'POST',
+      body: JSON.stringify({ amount }),
+    });
+  },
   async chargeInvoicePix(invoiceId: string): Promise<{
     success: boolean;
     txid: string;

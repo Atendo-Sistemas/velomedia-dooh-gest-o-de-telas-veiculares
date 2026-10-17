@@ -312,6 +312,7 @@ export const AdvertiserSchema = z.object({
   creditLimit: z.number().nonnegative(),
   currentBalance: z.number(),
   balance: z.number().optional(),
+  prepaidBalance: z.number().nonnegative().optional(),
   status: z.enum(['active', 'pending_verification', 'blocked']),
   activeCampaignsCount: z.number().nonnegative(),
   totalSpent: z.number().nonnegative(),
@@ -325,6 +326,8 @@ export const InvoiceSchema = z.object({
   organizationId: z.string().optional(),
   organizationName: z.string().optional(),
   planTier: z.string().min(1).optional(),
+  advertiserId: z.string().min(1).optional(),
+  purpose: z.enum(['saas_plan', 'advertiser_recharge']).optional(),
   month: z.string().optional(),
   issueDate: z.string(),
   dueDate: z.string(),
@@ -339,6 +342,11 @@ export const InvoiceSchema = z.object({
   txid: z.string().optional(),
   pixQrCodeExpiresAt: z.string().optional(),
   paidAt: z.string().optional(),
+});
+
+export const AdvertiserInvoiceRequestSchema = z.object({
+  amount: z.number().min(0.01).max(1_000_000)
+    .refine(amount => Number(amount.toFixed(2)) === amount, 'O valor deve ter no máximo duas casas decimais.'),
 });
 
 export const SaaSPlanSchema = z.object({

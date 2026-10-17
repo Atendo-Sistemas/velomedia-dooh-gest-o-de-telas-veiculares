@@ -72,13 +72,13 @@ export class VeloPixGatewayAdapter {
   }
 
   private async ensureAsaasCustomer(params: {
-    organizationId: string;
+    externalReference: string;
     organizationName: string;
     cnpj: string;
     email: string;
     phone: string;
   }): Promise<string> {
-    const reference = `organization:${params.organizationId}`;
+    const reference = params.externalReference;
     const query = new URLSearchParams({ externalReference: reference, limit: '100' });
     const customers = await this.asaasRequest<{ data?: Array<{ id: string; externalReference?: string }> }>(
       `/customers?${query.toString()}`,
@@ -112,6 +112,7 @@ export class VeloPixGatewayAdapter {
   public async createPixCharge(params: {
     invoiceId: string;
     organizationId: string;
+    customerReference?: string;
     amount: number;
     organizationName: string;
     description: string;
@@ -137,7 +138,7 @@ export class VeloPixGatewayAdapter {
 
     try {
       const customerId = await this.ensureAsaasCustomer({
-        organizationId: params.organizationId,
+        externalReference: params.customerReference || `organization:${params.organizationId}`,
         organizationName: params.organizationName,
         cnpj: document,
         email: params.email,

@@ -38,6 +38,7 @@ import {
   OrganizationSchema,
   PairingTokenRequestSchema,
   AdvertiserSchema,
+  AdvertiserInvoiceRequestSchema,
   InvoiceSchema,
   SaaSPlanSchema,
   ChangePasswordSchema,
@@ -84,7 +85,7 @@ apiRouter.get('/health', async (_req: Request, res: Response) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.5.0-beta.5',
+    version: '2.5.0-beta.6',
     environment: process.env.NODE_ENV || 'production',
   });
 });
@@ -659,7 +660,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.5.0-beta.5',
+      appVersion: '2.5.0-beta.6',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
@@ -1086,6 +1087,48 @@ apiRouter.delete('/advertisers/:id', requireAuth, requireRole(['platform_admin',
   res.json({ success: true });
 });
 
+apiRouter.post('/advertisers/:id/invoices', requireAuth, adminRequestRateLimiter, requireRole(['platform_admin', 'super_admin', 'organization_admin']), validateBody(AdvertiserInvoiceRequestSchema), async (req: Request, res: Response) => {
+  const tenantId = await resolveTenant(req);
+  const advertiser = await repository.getAdvertiserById(req.params.id, tenantId);
+  if (!advertiser) return res.status(404).json({ error: 'not_found', message: 'Anunciante não encontrado nesta organização.' });
+  if (advertiser.status !== 'active') {
+    return res.status(409).json({ error: 'advertiser_inactive', message: 'Somente anunciantes ativos podem receber cobranças.' });
+  }
+
+  const issuedAt = new Date();
+  const issueDate = issuedAt.toISOString().slice(0, 10);
+  const dueDate = new Date(issuedAt.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const id = `adv_inv_${randomUUID()}`;
+  const invoice: SaaSInvoice = {
+    id,
+    invoiceNumber: `ADV-${issueDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
+    organizationId: tenantId,
+    organizationName: advertiser.companyName,
+    advertiserId: advertiser.id,
+    purpose: 'advertiser_recharge',
+    issueDate,
+    dueDate,
+    month: issueDate.slice(0, 7),
+    amount: req.body.amount,
+    status: 'pending',
+    screensBilled: 0,
+    paymentMethod: 'pix',
+  };
+  const saved = await repository.saveInvoice(invoice, tenantId);
+  if (!saved) return res.status(409).json({ error: 'invoice_conflict', message: 'Não foi possível registrar a fatura do anunciante.' });
+  await repository.logAudit({
+    organizationId: tenantId,
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'CREATE_ADVERTISER_INVOICE',
+    resource: 'invoices',
+    resourceId: saved.id,
+    details: { advertiserId: advertiser.id, amount: saved.amount },
+    ipAddress: req.ip,
+  });
+  res.status(201).json(saved);
+});
+
 apiRouter.get('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin', 'financial_auditor']), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
   res.json(await repository.getInvoices(tenantId));
@@ -1094,6 +1137,9 @@ apiRouter.get('/invoices', requireAuth, requireRole(['platform_admin', 'super_ad
 apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_admin', 'organization_admin']), validateBody(InvoiceSchema), async (req: Request, res: Response) => {
   const tenantId = await resolveTenant(req);
   const invoice = req.body as SaaSInvoice;
+  if (invoice.advertiserId || invoice.purpose === 'advertiser_recharge') {
+    return res.status(400).json({ error: 'use_advertiser_invoice_route', message: 'Crie cobranças de anunciantes pela rota específica do anunciante.' });
+  }
   if (invoice.status !== 'pending') {
     return res.status(400).json({ error: 'invalid_invoice_status', message: 'Uma fatura nova deve iniciar como pendente.' });
   }
@@ -1101,6 +1147,7 @@ apiRouter.post('/invoices', requireAuth, requireRole(['platform_admin', 'super_a
     return res.status(409).json({ error: 'invoice_exists', message: 'Já existe uma fatura com este identificador.' });
   }
   if (invoice.planTier) {
+    invoice.purpose = 'saas_plan';
     const organization = await repository.getOrganizationById(tenantId);
     const plan = await repository.getPlanById(invoice.planTier);
     if (!organization || !plan) {
@@ -1156,8 +1203,19 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_a
   if (invoice.status === 'paid') {
     return res.status(409).json({ error: 'invoice_already_paid', message: 'Esta fatura já foi paga.' });
   }
-  const organization = await repository.getOrganizationById(tenantId);
-  if (!organization) {
+  const advertiser = invoice.advertiserId
+    ? await repository.getAdvertiserById(invoice.advertiserId, tenantId)
+    : undefined;
+  const organization = invoice.advertiserId
+    ? undefined
+    : await repository.getOrganizationById(tenantId);
+  if (invoice.advertiserId && !advertiser) {
+    return res.status(404).json({ error: 'advertiser_not_found', message: 'Anunciante da fatura não encontrado.' });
+  }
+  if (advertiser && advertiser.status !== 'active') {
+    return res.status(409).json({ error: 'advertiser_inactive', message: 'O anunciante está inativo e não pode receber cobranças.' });
+  }
+  if (!advertiser && !organization) {
     return res.status(404).json({ error: 'organization_not_found', message: 'Organização da fatura não encontrada.' });
   }
 
@@ -1165,12 +1223,15 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_a
     invoiceId: invoice.id,
     organizationId: tenantId,
     amount: invoice.amount,
-    organizationName: organization.name,
-    description: `Fatura VeloMedia DOOH #${invoice.invoiceNumber}`,
+    organizationName: advertiser?.companyName || organization!.name,
+    customerReference: advertiser ? `advertiser:${tenantId}:${advertiser.id}` : undefined,
+    description: advertiser
+      ? `Recarga de mídia ${advertiser.companyName} #${invoice.invoiceNumber}`
+      : `Fatura VeloMedia DOOH #${invoice.invoiceNumber}`,
     dueDate: invoice.dueDate,
-    cnpj: organization.cnpj,
-    email: organization.billingEmail,
-    phone: organization.adminUser.phone,
+    cnpj: advertiser?.cnpj || organization!.cnpj,
+    email: advertiser?.email || organization!.billingEmail,
+    phone: advertiser?.phone || organization!.adminUser.phone,
   });
 
   if (result.status === 'payment_provider_not_configured') {
@@ -1239,30 +1300,44 @@ apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, 
       const match = matchingInvoices[0];
       if (match) {
         if (paidEvents.has(event.event) && match.invoice.status !== 'paid') {
-          const organization = await repository.getOrganizationById(match.organizationId);
-          if (match.invoice.planTier) {
-            const plan = await repository.getPlanById(match.invoice.planTier);
-            if (!plan || !organization) {
-              return res.status(409).json({ error: 'invoice_plan_unavailable' });
+          const paidAt = payment.paymentDate || payment.clientPaymentDate || new Date().toISOString();
+          if (match.invoice.advertiserId) {
+            if (!await repository.confirmAdvertiserInvoicePayment(match.invoice.id, match.organizationId, paidAt)) {
+              return res.status(409).json({ error: 'advertiser_invoice_confirmation_failed' });
             }
-            organization.planTier = plan.id;
-            organization.maxScreensLimit = plan.maxScreens;
-            organization.maxCampaignsLimit = plan.maxCampaigns;
-            organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
-            organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
-            await repository.saveOrganization(organization);
-          }
-          match.invoice.status = 'paid';
-          match.invoice.paidAt = payment.paymentDate || payment.clientPaymentDate || new Date().toISOString();
-          if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
-            return res.status(500).json({ error: 'invoice_update_failed' });
+            match.invoice.status = 'paid';
+            match.invoice.paidAt = paidAt;
+          } else {
+            const organization = await repository.getOrganizationById(match.organizationId);
+            if (match.invoice.planTier) {
+              const plan = await repository.getPlanById(match.invoice.planTier);
+              if (!plan || !organization) {
+                return res.status(409).json({ error: 'invoice_plan_unavailable' });
+              }
+              organization.planTier = plan.id;
+              organization.maxScreensLimit = plan.maxScreens;
+              organization.maxCampaignsLimit = plan.maxCampaigns;
+              organization.monthlySoftwareCost = Number((plan.baseMonthlyFee + organization.activeScreensCount * plan.pricePerScreenMonth).toFixed(2));
+              organization.netProfit = organization.estimatedGrossAdRevenue - organization.driverPayoutTotal - organization.monthlySoftwareCost;
+              await repository.saveOrganization(organization);
+            }
+            match.invoice.status = 'paid';
+            match.invoice.paidAt = paidAt;
+            if (!await repository.saveInvoice(match.invoice, match.organizationId)) {
+              return res.status(500).json({ error: 'invoice_update_failed' });
+            }
           }
           await repository.logAudit({
             organizationId: match.organizationId,
             action: 'INVOICE_PAYMENT_CONFIRMED',
             resource: 'invoices',
             resourceId: match.invoice.id,
-            details: { provider: 'asaas', amount: match.invoice.amount, planTier: match.invoice.planTier },
+            details: {
+              provider: 'asaas',
+              amount: match.invoice.amount,
+              planTier: match.invoice.planTier,
+              advertiserId: match.invoice.advertiserId,
+            },
           });
         } else if (overdueEvents.has(event.event) && match.invoice.status === 'pending') {
           match.invoice.status = 'overdue';

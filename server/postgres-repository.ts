@@ -329,6 +329,42 @@ export class PostgresRepository implements VeloRepository {
   async getInvoices(orgId: string) { return this.list<SaaSInvoice>('invoice', orgId); }
   async getInvoiceById(id: string, orgId: string) { return this.byId<SaaSInvoice>('invoice', id, orgId); }
   async saveInvoice(v: SaaSInvoice, orgId: string) { const item = { ...v, organizationId: orgId }; return await this.save('invoice', item, orgId) ? item : null; }
+  async confirmAdvertiserInvoicePayment(invoiceId: string, orgId: string, paidAt: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const invoice = await this.byIdForUpdate<SaaSInvoice>('invoice', invoiceId, orgId, client);
+      if (!invoice || !invoice.advertiserId || invoice.purpose !== 'advertiser_recharge') {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      if (invoice.status === 'paid') {
+        await client.query('COMMIT');
+        return true;
+      }
+      const advertiser = await this.byIdForUpdate<AdvertiserAccount>('advertiser', invoice.advertiserId, orgId, client);
+      if (!advertiser) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      advertiser.prepaidBalance = Number(((advertiser.prepaidBalance || 0) + invoice.amount).toFixed(2));
+      invoice.status = 'paid';
+      invoice.paidAt = paidAt;
+      const savedAdvertiser = await this.save('advertiser', advertiser, orgId, client);
+      const savedInvoice = await this.save('invoice', invoice, orgId, client);
+      if (!savedAdvertiser || !savedInvoice) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   async getPlans() {
     await this.ensureDefaultPlans();
     return this.list<SaaSPlan>('plan');

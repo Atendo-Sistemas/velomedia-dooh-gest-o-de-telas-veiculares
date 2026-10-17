@@ -43,20 +43,30 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
   onManageClients,
 }) => {
   const [invoices, setInvoices] = useState<SaaSInvoice[]>([]);
+  const [advertiserAccounts, setAdvertiserAccounts] = useState(advertisers);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
   const [isCreatingPix, setIsCreatingPix] = useState(false);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [showPixModal, setShowPixModal] = useState<SaaSInvoice | null>(null);
   const [isCreatingPlanInvoice, setIsCreatingPlanInvoice] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [advertiserInvoiceError, setAdvertiserInvoiceError] = useState<string | null>(null);
+  const [selectedAdvertiserId, setSelectedAdvertiserId] = useState(advertisers.find(advertiser => advertiser.status === 'active')?.id || '');
+  const [advertiserInvoiceAmount, setAdvertiserInvoiceAmount] = useState('');
+  const [isCreatingAdvertiserInvoice, setIsCreatingAdvertiserInvoice] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const activeAdvertisers = advertiserAccounts.filter(advertiser => advertiser.status === 'active');
 
   const refreshInvoices = async () => {
     setInvoiceError(null);
     try {
-      const result = await apiClient.getInvoices();
+      const [result, refreshedAdvertisers] = await Promise.all([
+        apiClient.getInvoices(),
+        apiClient.getAdvertisers(),
+      ]);
       setInvoices(result);
+      setAdvertiserAccounts(refreshedAdvertisers);
       setShowPixModal(current => current ? result.find(invoice => invoice.id === current.id) || current : null);
     } catch (error) {
       setInvoiceError(error instanceof Error ? error.message : 'Não foi possível carregar as faturas.');
@@ -68,6 +78,40 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
   useEffect(() => {
     void refreshInvoices();
   }, []);
+
+  useEffect(() => {
+    setAdvertiserAccounts(advertisers);
+  }, [advertisers]);
+
+  useEffect(() => {
+    const activeAdvertisers = advertiserAccounts.filter(advertiser => advertiser.status === 'active');
+    if (!activeAdvertisers.some(advertiser => advertiser.id === selectedAdvertiserId)) {
+      setSelectedAdvertiserId(activeAdvertisers[0]?.id || '');
+    }
+  }, [advertiserAccounts, selectedAdvertiserId]);
+
+  const handleCreateAdvertiserInvoice = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedAdvertiserId || isCreatingAdvertiserInvoice) return;
+    const amount = Number(advertiserInvoiceAmount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+      setAdvertiserInvoiceError('Informe um valor maior que zero e de até R$ 1.000.000,00.');
+      return;
+    }
+    setIsCreatingAdvertiserInvoice(true);
+    setAdvertiserInvoiceError(null);
+    try {
+      const invoice = await apiClient.createAdvertiserInvoice(selectedAdvertiserId, amount);
+      setInvoices(current => [invoice, ...current.filter(existing => existing.id !== invoice.id)]);
+      setAdvertiserInvoiceAmount('');
+      setToastMessage(`Cobrança ${invoice.invoiceNumber} criada para ${invoice.organizationName}.`);
+      setTimeout(() => setToastMessage(null), 4500);
+    } catch (error) {
+      setAdvertiserInvoiceError(error instanceof Error ? error.message : 'Não foi possível criar a cobrança do anunciante.');
+    } finally {
+      setIsCreatingAdvertiserInvoice(false);
+    }
+  };
 
   // Upgrade Plan handler
   const handleUpgradePlan = async (plan: SaaSPlan) => {
@@ -370,12 +414,57 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
                 <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">{advertiser.status}</span>
               </div>
               <p className="mt-3 text-xs text-slate-400">{advertiser.activeCampaignsCount} campanhas · Saldo R$ {advertiser.currentBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+              <p className="mt-1 text-xs text-emerald-300">Crédito pré-pago: R$ {(advertiserAccounts.find(item => item.id === advertiser.id)?.prepaidBalance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
               <p className="mt-2 font-mono text-[10px] text-indigo-300">Portal: {advertiser.portalAccessCode}</p>
             </article>
           ))}
           {advertisers.length === 0 && <p className="text-xs text-slate-400">Nenhum cliente cadastrado para esta organização.</p>}
         </div>
       </div>
+
+      <section className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
+        <div>
+          <h2 className="text-lg font-bold text-white">Cobranças de anunciantes</h2>
+          <p className="mt-1 text-xs text-slate-400">Emita uma cobrança PIX via Asaas. O crédito só é liberado após a confirmação do pagamento.</p>
+        </div>
+        {advertiserInvoiceError && <p role="alert" className="rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">{advertiserInvoiceError}</p>}
+        <form onSubmit={handleCreateAdvertiserInvoice} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto]">
+          <label className="text-xs font-semibold text-slate-300">
+            Anunciante
+            <select required value={selectedAdvertiserId} onChange={event => setSelectedAdvertiserId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
+              <option value="" disabled>Selecione um anunciante</option>
+              {activeAdvertisers.map(advertiser => <option key={advertiser.id} value={advertiser.id}>{advertiser.companyName}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-300">
+            Valor da recarga (R$)
+            <input required type="number" min="0.01" max="1000000" step="0.01" value={advertiserInvoiceAmount} onChange={event => setAdvertiserInvoiceAmount(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" />
+          </label>
+          <button disabled={!selectedAdvertiserId || isCreatingAdvertiserInvoice} type="submit" className="self-end rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50">
+            {isCreatingAdvertiserInvoice ? 'Criando…' : 'Criar cobrança PIX'}
+          </button>
+        </form>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[700px] text-left text-xs">
+            <thead className="border-b border-slate-800 text-[10px] uppercase text-slate-400"><tr><th className="px-3 py-3">Fatura</th><th className="px-3 py-3">Anunciante</th><th className="px-3 py-3">Vencimento</th><th className="px-3 py-3">Valor</th><th className="px-3 py-3">Status</th><th className="px-3 py-3 text-right">Ação</th></tr></thead>
+            <tbody className="divide-y divide-slate-800/70">
+              {invoices.filter(invoice => Boolean(invoice.advertiserId)).map(invoice => {
+                const advertiser = advertiserAccounts.find(item => item.id === invoice.advertiserId);
+                return <tr key={invoice.id}>
+                  <td className="px-3 py-3 font-mono text-white">{invoice.invoiceNumber}</td>
+                  <td className="px-3 py-3 text-slate-300">{advertiser?.companyName || invoice.organizationName || invoice.advertiserId}</td>
+                  <td className="px-3 py-3 text-slate-300">{invoice.dueDate}</td>
+                  <td className="px-3 py-3 font-mono text-emerald-300">R$ {invoice.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                  <td className="px-3 py-3 text-slate-300">{invoice.status === 'paid' ? 'Paga' : invoice.status === 'overdue' ? 'Vencida' : 'Pendente'}</td>
+                  <td className="px-3 py-3 text-right">{invoice.status === 'paid' ? <span className="text-emerald-300">Crédito confirmado</span> : <button onClick={() => setShowPixModal(invoice)} className="rounded-lg bg-emerald-700 px-3 py-1.5 font-bold text-white hover:bg-emerald-600">{invoice.txid ? 'Ver PIX' : 'Gerar PIX'}</button>}</td>
+                </tr>;
+              })}
+              {!isLoadingInvoices && invoices.every(invoice => !invoice.advertiserId) && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">Nenhuma cobrança de anunciante cadastrada.</td></tr>}
+              {isLoadingInvoices && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">Carregando cobranças…</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {/* SaaS Invoices & Financial History */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
@@ -416,7 +505,7 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {invoices.map((inv) => (
+              {invoices.filter(invoice => !invoice.advertiserId).map((inv) => (
                 <tr key={inv.id} className="hover:bg-slate-800/40 transition">
                   <td className="py-3.5 px-4 font-mono font-bold text-white">{inv.invoiceNumber}</td>
                   <td className="py-3.5 px-4 text-slate-300">{inv.issueDate}</td>
@@ -457,7 +546,7 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
                   </td>
                 </tr>
               ))}
-              {!isLoadingInvoices && invoices.length === 0 && (
+              {!isLoadingInvoices && invoices.every(invoice => invoice.advertiserId) && (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-xs text-slate-400">Nenhuma fatura cadastrada para esta organização.</td>
                 </tr>
@@ -483,7 +572,7 @@ export const SaaSBillingManager: React.FC<SaaSBillingManagerProps> = ({
             <div>
               <h2 className="text-lg font-bold text-white">Pagamento Instantâneo via PIX</h2>
               <p className="text-xs text-slate-400 mt-1">
-                Fatura {showPixModal.invoiceNumber} • {showPixModal.screensBilled} telas veiculares
+                Fatura {showPixModal.invoiceNumber} • {showPixModal.advertiserId ? advertiserAccounts.find(advertiser => advertiser.id === showPixModal.advertiserId)?.companyName || 'Anunciante' : `${showPixModal.screensBilled} telas veiculares`}
                 {showPixModal.planTier && ` • ${plans.find(plan => plan.id === showPixModal.planTier)?.name || showPixModal.planTier}`}
               </p>
             </div>

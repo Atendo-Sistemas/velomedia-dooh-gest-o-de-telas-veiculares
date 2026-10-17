@@ -61,6 +61,8 @@ export interface SaaSInvoice {
   organizationId?: string;
   organizationName?: string;
   planTier?: SaaSPlanTier;
+  advertiserId?: string;
+  purpose?: 'saas_plan' | 'advertiser_recharge';
   month?: string;
   issueDate: string;
   dueDate: string;
@@ -437,6 +439,7 @@ export interface AdvertiserAccount {
   creditLimit: number;
   currentBalance: number;
   balance?: number;
+  prepaidBalance?: number;
   status: 'active' | 'pending_verification' | 'blocked';
   activeCampaignsCount: number;
   totalSpent: number;

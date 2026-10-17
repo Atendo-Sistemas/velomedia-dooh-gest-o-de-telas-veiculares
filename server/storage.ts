@@ -489,7 +489,7 @@ export class VeloStorage {
           currentFps: 60,
           brightness: 85,
           volume: 40,
-          appVersion: '2.5.0-beta.5',
+          appVersion: '2.5.0-beta.6',
           lastHeartbeat: new Date().toISOString(),
           kioskLocked: true,
           screenUptimeTodayHours: 8.5,
@@ -1174,6 +1174,24 @@ export class VeloStorage {
     }
     this.save();
     return invWithOrg;
+  }
+
+  public confirmAdvertiserInvoicePayment(invoiceId: string, orgId: string, paidAt: string): boolean {
+    const invoice = this.memoryDb.invoices.find(item =>
+      item.id === invoiceId && item.organizationId === orgId && item.advertiserId && item.purpose === 'advertiser_recharge',
+    );
+    if (!invoice) return false;
+    if (invoice.status === 'paid') return true;
+    const advertiser = this.memoryDb.advertisers.find(item =>
+      item.id === invoice.advertiserId && item.organizationId === orgId,
+    );
+    if (!advertiser) return false;
+
+    advertiser.prepaidBalance = Number(((advertiser.prepaidBalance || 0) + invoice.amount).toFixed(2));
+    invoice.status = 'paid';
+    invoice.paidAt = paidAt;
+    this.save();
+    return true;
   }
 
   // --- PROOF OF PLAY LOGS (STRICT MULTI-TENANT ISOLATION) ---
