@@ -184,7 +184,7 @@ apiRouter.post('/auth/login', loginRequestRateLimiter, validateBody(LoginSchema)
   // Section 2.2: Do NOT return the token in JSON body; keep it exclusively in HttpOnly cookie
   res.json({
     user: safeUser,
-    organization: org,
+    organization: user.role === 'advertiser' ? undefined : org,
   });
 });
 
@@ -206,7 +206,7 @@ apiRouter.get('/auth/me', requireAuth, async (req: Request, res: Response): Prom
   res.json({
     authenticated: true,
     user: user ? safeUser : undefined,
-    organization: org,
+    organization: req.user!.role === 'advertiser' ? undefined : org,
   });
 
   apiRouter.use((req: Request, res: Response, next) => {

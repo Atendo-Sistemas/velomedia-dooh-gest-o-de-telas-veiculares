@@ -2741,9 +2741,15 @@ export const RegistrationCenter: React.FC<RegistrationCenterProps> = ({
               )}
 
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1 text-slate-400 text-[11px]">
-                <span className="font-bold text-indigo-300 block">Permissões automáticas concedidas:</span>
-                <span>• Acesso ao painel de controle operacional</span>
-                <span className="block">• Notificações de telemetria e alertas em tempo real</span>
+                <span className="font-bold text-indigo-300 block">{userRole === 'advertiser' ? 'Acesso do anunciante:' : 'Permissões automáticas concedidas:'}</span>
+                {userRole === 'advertiser' ? (
+                  <span className="block">• Acesso somente ao portal financeiro e aos dados da conta de anunciante vinculada.</span>
+                ) : (
+                  <>
+                    <span>• Acesso ao painel de controle operacional</span>
+                    <span className="block">• Notificações de telemetria e alertas em tempo real</span>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
