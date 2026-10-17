@@ -80,7 +80,7 @@ apiRouter.get('/health', async (_req: Request, res: Response) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.5.0-beta.3',
+    version: '2.5.0-beta.4',
     environment: process.env.NODE_ENV || 'production',
   });
 });
@@ -406,7 +406,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.5.0-beta.3',
+      appVersion: '2.5.0-beta.4',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,

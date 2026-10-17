@@ -30,10 +30,10 @@ const categories: Array<[keyof LegacyStore, string]> = [
 
 async function importFile(filePath: string): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) throw new Error('DATABASE_URL is required.');
+  if (!databaseUrl) throw new Error('A variável DATABASE_URL é obrigatória.');
   const parsed: LegacyStore = JSON.parse(await readFile(filePath, 'utf8'));
   if (!Array.isArray(parsed.organizations) || !Array.isArray(parsed.users)) {
-    throw new Error('Input file is not a VeloMedia JSON store (organizations/users arrays are required).');
+    throw new Error('O arquivo informado não é um armazenamento JSON VeloMedia (são obrigatórios os arrays organizations/users).');
   }
   const repo = new PostgresRepository(databaseUrl);
   try {
@@ -70,7 +70,7 @@ async function importFile(filePath: string): Promise<void> {
         const values = parsed[property] || [];
         for (const payload of values) {
           const id = String(payload.id || payload.token || payload.eventId || '');
-          if (!id) throw new Error(`A ${kind} record is missing its id.`);
+          if (!id) throw new Error(`O registro ${kind} está sem ID.`);
           const organizationId = typeof payload.organizationId === 'string' ? payload.organizationId : null;
           await client.query(
             'INSERT INTO repository_records(kind,id,organization_id,payload) VALUES($1,$2,$3,$4::jsonb)',

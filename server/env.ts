@@ -1,6 +1,6 @@
 /**
- * VeloMedia DOOH - Production Environment & Security Configuration Guard
- * Enforces fail-fast validation before the HTTP server binds to any port.
+ * VeloMedia DOOH - Validação do ambiente de produção e da configuração de segurança.
+ * Valida as configurações antes de iniciar o servidor HTTP.
  */
 
 export interface EnvValidationResult {
@@ -116,8 +116,8 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
 }
 
 /**
- * Enforces production environment variables.
- * Throws a fatal exception if any required variable is missing in production.
+ * Valida as variáveis de ambiente de produção.
+ * Interrompe a inicialização se uma variável obrigatória estiver ausente.
  */
 export function enforceProductionEnvironment(env: NodeJS.ProcessEnv = process.env): void {
   const result = validateEnvironment(env);

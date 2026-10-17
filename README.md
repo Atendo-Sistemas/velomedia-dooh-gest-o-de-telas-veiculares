@@ -15,16 +15,16 @@ Sem `DATABASE_URL`, desenvolvimento usa o armazenamento JSON em `data/velomedia_
 
 ## VPS Linux: produção
 
-Production requires a valid PostgreSQL `DATABASE_URL`; startup fails closed if it is missing or invalid. The API and auth use the asynchronous repository, not the synchronous JSON store. The existing relational schema is installed at startup, then ordered SQL migrations are applied transactionally and recorded in `schema_migrations`.
+A produção exige uma `DATABASE_URL` válida para o PostgreSQL; se ela estiver ausente ou inválida, a inicialização é interrompida. A API e a autenticação usam o repositório assíncrono, não o armazenamento JSON síncrono. O esquema relacional existente é instalado na inicialização; em seguida, as migrações SQL são aplicadas em ordem, dentro de transações, e registradas em `schema_migrations`.
 
-The API preserves its existing domain object shapes as JSONB records in `repository_records`, indexed by type and tenant. Sessions, device credentials, pairing tokens, replay nonces, webhook idempotency and remote commands use dedicated PostgreSQL tables. Tenant-scoped operations query and mutate records with their organization ID. Pairing-token consumption is atomic; PoP/replay insertion and campaign/device/driver counters run in a database transaction with row locks. PostgreSQL is the production source of truth; back up the database, not an app JSON file.
+A API mantém o formato atual dos objetos de domínio como registros JSONB em `repository_records`, indexados por tipo e organização. Sessões, credenciais de dispositivos, tokens de pareamento, nonces anti-replay, controle de idempotência de webhooks e comandos remotos usam tabelas próprias no PostgreSQL. As operações isoladas por organização consultam e alteram registros usando o ID da organização. O consumo de tokens de pareamento é atômico; a gravação de PoP e anti-replay, assim como os contadores de campanhas, dispositivos e motoristas, ocorre em transações com bloqueio de linhas. O PostgreSQL é a fonte oficial dos dados em produção: faça backup do banco, não de um arquivo JSON da aplicação.
 
-PIX billing for organization invoices is integrated with Asaas. Driver payouts and advertiser charge flows are not integrated; the API must not mark those operations as paid.
-The public QR player loads display-safe campaign data without an admin session. Proof-of-play submissions still require a provisioned device credential and signed request; the public kiosk bootstrap does not expose or create that credential.
+A cobrança de faturas de organizações via PIX está integrada ao Asaas. Os repasses a motoristas e as cobranças de anunciantes não estão integrados; a API não deve marcar essas operações como pagas.
+O player público por QR Code carrega dados de campanhas próprios para exibição sem uma sessão administrativa. O envio de registros de exibição (Proof of Play) ainda exige uma credencial de dispositivo provisionada e uma requisição assinada; a inicialização pública do quiosque não expõe nem cria essa credencial.
 
 ### Docker Compose
 
-1. Install Docker Engine with Compose and Caddy. Put the repository at `/opt/velomedia`:
+1. Instale o Docker Engine com Compose e o Caddy. Coloque o repositório em `/opt/velomedia`:
 
    ```sh
    cd /opt/velomedia
@@ -32,9 +32,9 @@ The public QR player loads display-safe campaign data without an admin session. 
    chmod 600 .env
    ```
 
-2. Set `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (at least 16 characters), `WEBHOOK_SECRET` (`openssl rand -hex 32`), `POSTGRES_PASSWORD` and `POSTGRES_APP_PASSWORD` (`openssl rand -hex 24` for each), and `CORS_ALLOWED_ORIGINS` to the HTTPS origin. Compose initializes a database owner and a separate app role; the app role receives only the database/schema privileges required for startup migrations. Use URL-safe hex credentials for Compose's generated app URL. Set `APP_HOST_PORT` to a free local port (default `3300`); do not expose it publicly.
+2. Configure `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (com pelo menos 16 caracteres), `WEBHOOK_SECRET` (`openssl rand -hex 32`), `POSTGRES_PASSWORD` e `POSTGRES_APP_PASSWORD` (gere cada uma com `openssl rand -hex 24`) e defina `CORS_ALLOWED_ORIGINS` com a origem HTTPS. O Compose inicializa um usuário administrador do banco e um usuário separado para a aplicação; este último recebe somente as permissões de banco/esquema necessárias às migrações de inicialização. Use credenciais hexadecimais seguras para URLs no formato usado pelo Compose. Defina `APP_HOST_PORT` como uma porta local livre (padrão `3300`); não a exponha publicamente.
 
-3. Start and verify:
+3. Inicie e verifique:
 
    ```sh
    docker compose up -d --build
@@ -42,27 +42,27 @@ The public QR player loads display-safe campaign data without an admin session. 
    curl --fail http://127.0.0.1:3300/api/health
    ```
 
-   PostgreSQL runs privately with a readiness health check and named volume `velomedia_postgres`; the app waits for PostgreSQL to be healthy. The app's `/api/health` check also verifies a database connection. Only the app port is published on loopback. `docker compose down` retains the volume. Never use `docker compose down -v` if you need the data.
+   O PostgreSQL é executado em rede privada, com verificação de disponibilidade e volume nomeado `velomedia_postgres`; a aplicação aguarda o PostgreSQL ficar disponível. A verificação `/api/health` da aplicação também confirma a conexão com o banco. Somente a porta da aplicação é publicada no endereço local (loopback). `docker compose down` mantém o volume. Se precisar dos dados, nunca use `docker compose down -v`.
 
-4. Configure the real domain in `deploy/Caddyfile.docker`; keep the `reverse_proxy` target on the matching loopback port. Point DNS to the VPS, configure the shared reverse proxy without replacing other sites, and allow only SSH/HTTP/HTTPS through the firewall.
+4. Configure o domínio real em `deploy/Caddyfile.docker`; mantenha o destino de `reverse_proxy` na porta loopback correspondente. Aponte o DNS para a VPS, configure o proxy reverso compartilhado sem substituir outros sites e permita somente SSH/HTTP/HTTPS no firewall.
 
-5. Review `docker compose logs -f app`. Startup applies pending schema migrations and creates the configured initial admin only when needed. Existing super-admin password hashes are retained; changing `INITIAL_ADMIN_PASSWORD` does not reset an existing password.
+5. Acompanhe `docker compose logs -f app`. Na inicialização, as migrações pendentes do esquema são aplicadas e o administrador inicial configurado é criado somente se necessário. Os hashes de senha de superadministradores existentes são mantidos; alterar `INITIAL_ADMIN_PASSWORD` não redefine uma senha existente.
 
-### Asaas PIX billing
+### Cobranças PIX pelo Asaas
 
-Select `PIX_GATEWAY_PROVIDER=asaas`, set `ASAAS_API_KEY`, and set `ASAAS_ENVIRONMENT` to `sandbox` for testing or `production` for live charges. Configure `ASAAS_WEBHOOK_TOKEN` as a unique random value of 32–255 characters (without spaces), and register `https://<your-domain>/api/v1/webhooks/asaas` in the Asaas dashboard using the same token. Subscribe to `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED`, and `PAYMENT_OVERDUE`; Asaas sends the configured token in the `asaas-access-token` header.
+Selecione `PIX_GATEWAY_PROVIDER=asaas`, defina `ASAAS_API_KEY` e configure `ASAAS_ENVIRONMENT` como `sandbox` para testes ou `production` para cobranças reais. Defina `ASAAS_WEBHOOK_TOKEN` como um valor aleatório exclusivo de 32 a 255 caracteres (sem espaços) e cadastre `https://<seu-dominio>/api/v1/webhooks/asaas` no painel Asaas usando o mesmo token. Inscreva-se nos eventos `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED` e `PAYMENT_OVERDUE`; o Asaas envia o token configurado no cabeçalho `asaas-access-token`.
 
-The invoice PIX endpoint creates/reuses an Asaas customer from the organization CNPJ and billing contact, creates/reuses a PIX payment using the invoice as its external reference, and returns the copy-and-paste code and QR image. The webhook confirms only a payment whose provider ID, invoice reference, and amount match a locally recorded invoice. Test with Asaas sandbox credentials before enabling production. Never commit API keys or webhook tokens.
+O endpoint de PIX de faturas cria ou reutiliza um cliente Asaas com base no CNPJ da organização e no contato de cobrança, cria ou reutiliza um pagamento PIX usando a fatura como referência externa e retorna o código copia e cola e a imagem do QR Code. O webhook confirma somente pagamentos cujo ID no provedor, referência da fatura e valor correspondam a uma fatura registrada localmente. Teste com credenciais sandbox do Asaas antes de habilitar a produção. Nunca registre chaves de API ou tokens de webhook no repositório.
 
-### Migrate an existing JSON VPS
+### Migrar uma VPS existente com armazenamento JSON
 
-First stop the old app, take a protected backup/copy of its JSON store, create an **empty** PostgreSQL database, and configure `DATABASE_URL`, `INITIAL_ADMIN_EMAIL`, and `INITIAL_ADMIN_PASSWORD`. For a systemd/host installation run from the repository root (with development dependencies installed):
+Primeiro, pare a aplicação antiga, faça uma cópia protegida do armazenamento JSON, crie um banco PostgreSQL **vazio** e configure `DATABASE_URL`, `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD`. Em uma instalação com systemd diretamente no host, execute o comando a partir da raiz do repositório (com as dependências de desenvolvimento instaladas):
 
 ```sh
 npx tsx server/db/import-json.ts /secure/path/velomedia_store.json
 ```
 
-For Docker Compose, build the app image first, then run the bundled importer in a one-off app container (the source mount is read-only):
+No Docker Compose, primeiro crie a imagem da aplicação e depois execute o importador incluído em um contêiner temporário (a origem é montada como somente leitura):
 
 ```sh
 docker compose run --rm --user "$(id -u):$(id -g)" \
@@ -70,11 +70,11 @@ docker compose run --rm --user "$(id -u):$(id -g)" \
   --entrypoint node app dist/db-import.cjs /migration/source.json
 ```
 
-The importer rejects non-empty repository/session/security tables, imports the existing users with their password hashes (plus active sessions and device security state), and leaves the source file untouched. It runs migrations before importing and then performs the normal super-admin bootstrap without replacing an imported password hash. Verify record counts and sign-in before directing traffic to the new app. Keep the JSON backup until a PostgreSQL backup has been restored and checked.
+O importador rejeita tabelas de repositório, sessão ou segurança que não estejam vazias, importa os usuários existentes com seus hashes de senha (além das sessões ativas e do estado de segurança dos dispositivos) e não altera o arquivo de origem. Ele executa as migrações antes da importação e, em seguida, realiza a inicialização normal do superadministrador sem substituir hashes de senha importados. Verifique as quantidades de registros e o login antes de direcionar o tráfego para a nova aplicação. Mantenha o backup JSON até que um backup PostgreSQL tenha sido restaurado e validado.
 
-### systemd with a separately managed PostgreSQL server
+### systemd com servidor PostgreSQL gerenciado separadamente
 
-Install Node.js 22+, PostgreSQL, Caddy and a non-login `velomedia` service user. Install dependencies and build (`npm ci && npm run build`). Have a database administrator preinstall `uuid-ossp` and `pgcrypto`, then grant the app role database connect and schema usage/create privileges required for versioned startup migrations. Copy `.env.example` to `/etc/velomedia/velomedia.env`, set `DATABASE_URL` to the PostgreSQL connection string, configure the initial admin, webhook secret and HTTPS CORS origin, then restrict the file to root and the service group (`0640`). Set `PGSSL=true` where the database provider requires TLS. Install `deploy/velomedia.service` and `deploy/Caddyfile`; configure the real hostname and start with:
+Instale Node.js 22+, PostgreSQL, Caddy e um usuário de serviço `velomedia` sem permissão de login. Instale as dependências e gere a compilação (`npm ci && npm run build`). Peça ao administrador do banco para instalar previamente `uuid-ossp` e `pgcrypto` e, em seguida, conceder ao usuário da aplicação as permissões de conexão ao banco e de uso/criação do esquema necessárias às migrações versionadas de inicialização. Copie `.env.example` para `/etc/velomedia/velomedia.env`, defina `DATABASE_URL` com a URL de conexão do PostgreSQL e configure o administrador inicial, o segredo de webhook e a origem HTTPS do CORS; depois, restrinja o acesso ao arquivo ao root e ao grupo do serviço (`0640`). Defina `PGSSL=true` quando o provedor do banco exigir TLS. Instale `deploy/velomedia.service` e `deploy/Caddyfile`, configure o nome de domínio real e inicie com:
 
 ```sh
 sudo systemctl daemon-reload
@@ -82,16 +82,16 @@ sudo systemctl enable --now velomedia
 sudo systemctl status velomedia
 ```
 
-`DATABASE_URL` credentials must be URL-encoded. Permit network access to PostgreSQL only from the app host and use a least-privilege database role.
+As credenciais de `DATABASE_URL` devem estar codificadas para URL. Permita acesso de rede ao PostgreSQL somente a partir do host da aplicação e use uma função de banco com o mínimo de privilégios necessário.
 
-### Updates and backups
+### Atualizações e backups
 
-Take and test PostgreSQL backups regularly. Before updating, back up the database, stop the app, update code, run `npm ci` and `npm run build`, then start the app and review logs. Migrations are transactional and run at startup. Test restoring backups separately from routine upgrades.
+Faça backups do PostgreSQL regularmente e teste a restauração. Antes de atualizar, faça backup do banco, pare a aplicação, atualize o código, execute `npm ci` e `npm run build`, depois inicie a aplicação e verifique os logs. As migrações são transacionais e executadas na inicialização. Teste a restauração de backups separadamente das atualizações de rotina.
 
 ## Commands
 
-- `npm run dev` — development server with Vite.
-- `npm run build` — compiles the frontend and server.
-- `npm start` — starts the compiled server.
-- `npm run lint` — validates TypeScript.
-- `npm test` — runs automated tests.
+- `npm run dev` — inicia o servidor de desenvolvimento com Vite.
+- `npm run build` — compila o frontend e o servidor.
+- `npm start` — inicia o servidor compilado.
+- `npm run lint` — valida o TypeScript.
+- `npm test` — executa os testes automatizados.

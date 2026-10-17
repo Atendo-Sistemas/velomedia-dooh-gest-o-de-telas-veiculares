@@ -108,7 +108,7 @@ export class VeloStorage {
 
   constructor(filePath?: string) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('VeloStorage JSON persistence is development-only; use PostgreSQL in production.');
+      throw new Error('O armazenamento JSON VeloStorage só pode ser usado em desenvolvimento; use PostgreSQL em produção.');
     }
     this.dataFilePath = path.resolve(filePath || process.env.DATA_FILE_PATH || path.join(process.cwd(), 'data', 'velomedia_store.json'));
 
@@ -225,7 +225,7 @@ export class VeloStorage {
   private createSeedDatabase(): DatabaseSchema {
     const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || (
       process.env.NODE_ENV === 'production'
-        ? (() => { throw new Error('[SECURITY CONFIG] INITIAL_ADMIN_PASSWORD must be defined in strict production mode.'); })()
+        ? (() => { throw new Error('[CONFIGURAÇÃO DE SEGURANÇA] INITIAL_ADMIN_PASSWORD deve ser definida em produção.'); })()
         : 'VeloAdminDemo2026!'
     );
     const adminHash = hashPassword(adminPassword);
@@ -481,7 +481,7 @@ export class VeloStorage {
           currentFps: 60,
           brightness: 85,
           volume: 40,
-          appVersion: '2.5.0-beta.3',
+          appVersion: '2.5.0-beta.4',
           lastHeartbeat: new Date().toISOString(),
           kioskLocked: true,
           screenUptimeTodayHours: 8.5,

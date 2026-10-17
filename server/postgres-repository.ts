@@ -22,7 +22,7 @@ export class PostgresRepository implements VeloRepository {
   readonly pool: Pool;
 
   constructor(databaseUrl: string) {
-    if (!databaseUrl?.trim()) throw new Error('PostgresRepository requires DATABASE_URL.');
+    if (!databaseUrl?.trim()) throw new Error('O PostgresRepository exige a variável DATABASE_URL.');
     this.pool = new Pool({
       connectionString: databaseUrl,
       max: Number(process.env.PG_POOL_MAX || 10),
@@ -81,7 +81,7 @@ export class PostgresRepository implements VeloRepository {
     const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
     const password = process.env.INITIAL_ADMIN_PASSWORD;
     if (!email || !password) {
-      if (process.env.NODE_ENV === 'production') throw new Error('INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD are required.');
+      if (process.env.NODE_ENV === 'production') throw new Error('INITIAL_ADMIN_EMAIL e INITIAL_ADMIN_PASSWORD são obrigatórias.');
       return;
     }
     const client = await this.pool.connect();
