@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import cookieParser from 'cookie-parser';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { VeloStorage } from '../server/storage';
+import { adminRequestRateLimiter } from '../server/rate-limit';
 
 const environmentKeys = ['NODE_ENV', 'DATA_FILE_PATH', 'PIX_GATEWAY_PROVIDER', 'ASAAS_API_KEY', 'ASAAS_ENVIRONMENT', 'ASAAS_WEBHOOK_TOKEN'];
 const originalEnvironment = new Map(environmentKeys.map(key => [key, process.env[key]]));
@@ -59,20 +59,7 @@ describe('Asaas payment webhooks', () => {
       prepaidBalance: 12.5,
     };
     store.saveAdvertiser(advertiser, organization.id);
-    const adminSessionToken = 'advertiser-billing-admin-session';
-    store.createSession({
-      token: adminSessionToken,
-      userId: 'user_master',
-      userEmail: 'admin@velomedia.com.br',
-      userName: 'Administrador Velo Master',
-      role: 'platform_admin',
-      organizationId: organization.id,
-      expiresAt: Date.now() + 60_000,
-      createdAt: new Date().toISOString(),
-    });
-
     const { apiRouter } = await import('../server/api');
-    const { authMiddleware } = await import('../server/auth');
     const originalFetch = globalThis.fetch;
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
       const providerUrl = new URL(String(input));
@@ -104,8 +91,17 @@ describe('Asaas payment webhooks', () => {
     });
     const app = express();
     app.use(express.json());
-    app.use(cookieParser());
-    app.use((req, res, next) => { void authMiddleware(req, res, next); });
+    app.use((req, _res, next) => {
+      req.user = {
+        id: 'user_master',
+        email: 'admin@velomedia.com.br',
+        name: 'Administrador Velo Master',
+        role: 'platform_admin',
+        organizationId: organization.id,
+      };
+      next();
+    });
+    app.use(adminRequestRateLimiter);
     app.use('/api/v1', apiRouter);
     activeServer = createServer(app);
     await new Promise<void>(resolve => activeServer!.listen(0, '127.0.0.1', () => resolve()));
@@ -115,7 +111,6 @@ describe('Asaas payment webhooks', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Cookie: `velo_session=${adminSessionToken}`,
       },
       body: JSON.stringify({ amount: 100 }),
     });
@@ -129,7 +124,7 @@ describe('Asaas payment webhooks', () => {
     });
     const chargeResponse = await fetch(`http://127.0.0.1:${port}/api/v1/invoices/${createdInvoice.id}/charge-pix`, {
       method: 'POST',
-      headers: { Cookie: `velo_session=${adminSessionToken}` },
+
     });
     expect(chargeResponse.status).toBe(200);
     expect(await chargeResponse.json()).toMatchObject({
