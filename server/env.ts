@@ -15,7 +15,6 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
 
   if (env.NODE_ENV === 'production') {
     const requiredVars = [
-      'WEBHOOK_SECRET',
       'CORS_ALLOWED_ORIGINS',
       'DATABASE_URL',
       'INITIAL_ADMIN_EMAIL',
@@ -34,19 +33,10 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       errors.push('BYPASS_ENV_CHECK é proibido em ambiente de produção.');
     }
 
-    if (env.PIX_GATEWAY_PROVIDER === 'asaas') {
-      for (const name of ['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN']) {
-        if (!env[name]?.trim()) {
-          missing.push(name);
-          errors.push(`Variável obrigatória para Asaas '${name}' ausente ou vazia.`);
-        }
-      }
-      if (env.ASAAS_ENVIRONMENT && !['sandbox', 'production'].includes(env.ASAAS_ENVIRONMENT)) {
-        errors.push('ASAAS_ENVIRONMENT deve ser sandbox ou production.');
-      }
-      if (env.ASAAS_WEBHOOK_TOKEN && (env.ASAAS_WEBHOOK_TOKEN.length < 32 || env.ASAAS_WEBHOOK_TOKEN.length > 255 || /\s/.test(env.ASAAS_WEBHOOK_TOKEN))) {
-        errors.push('ASAAS_WEBHOOK_TOKEN deve ter entre 32 e 255 caracteres e não conter espaços.');
-      }
+    // Tokens e APIs (Asaas, Mapbox, segredo de webhook) são configurados no painel do sistema
+    // após a instalação; as variáveis de ambiente correspondentes são opcionais.
+    if (env.ASAAS_ENVIRONMENT && !['sandbox', 'production'].includes(env.ASAAS_ENVIRONMENT)) {
+      errors.push('ASAAS_ENVIRONMENT deve ser sandbox ou production.');
     }
 
     const webhookSecret = env.WEBHOOK_SECRET?.trim();

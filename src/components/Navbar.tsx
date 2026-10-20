@@ -26,6 +26,7 @@ import {
   Activity,
   CheckCircle2,
   QrCode,
+  Settings,
   LogOut
 } from 'lucide-react';
 import { SaaSOrganization } from '../types';
@@ -42,6 +43,7 @@ export type ActiveTab =
   | 'advertiser_portal' 
   | 'passenger_portal' 
   | 'saas' 
+  | 'settings'
   | 'player' 
   | 'architecture';
 
@@ -92,6 +94,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'advertiser_portal' as ActiveTab, label: 'Portal Anunciante', icon: Briefcase, title: 'Portal do Cliente Anunciante (Métricas & Faturas)', category: 'portais', badge: 'PoP' },
     { id: 'passenger_portal' as ActiveTab, label: 'Hub Passageiro', icon: Gift, title: 'Experiência Interativa do Passageiro (Cupons & Quiz)', category: 'portais', badge: 'Cupons' },
     { id: 'saas' as ActiveTab, label: 'Meu Plano & Franquia', icon: Building2, title: 'Gestão da Franquia & Faturamento', category: 'sistema' },
+    ...(canAccessMaster ? [{ id: 'settings' as ActiveTab, label: 'Configurações', icon: Settings, title: 'Integrações: APIs e tokens do sistema', category: 'sistema' }] : []),
     { id: 'architecture' as ActiveTab, label: 'IoT Docs & Guia', icon: Radio, title: 'Guia de Arquitetura & Otimização', category: 'sistema' },
   ];
 

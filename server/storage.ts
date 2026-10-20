@@ -100,6 +100,7 @@ interface DatabaseSchema {
   deviceCredentials: DeviceCredentialRecord[];
   replayLogs: ReplayRecord[];
   webhooks: WebhookRecord[];
+  systemSettings?: Record<string, string>;
 }
 
 export class VeloStorage {
@@ -481,7 +482,7 @@ export class VeloStorage {
           currentFps: 60,
           brightness: 85,
           volume: 40,
-          appVersion: '2.5.0-beta.4',
+          appVersion: '2.5.0-beta.5',
           lastHeartbeat: new Date().toISOString(),
           kioskLocked: true,
           screenUptimeTodayHours: 8.5,
@@ -992,6 +993,15 @@ export class VeloStorage {
   }
 
   // --- WEBHOOK DEDUPLICATION ---
+  public getSystemSettings(): Record<string, string> {
+    return { ...(this.memoryDb.systemSettings || {}) };
+  }
+
+  public saveSystemSettings(settings: Record<string, string>): void {
+    this.memoryDb.systemSettings = { ...settings };
+    this.save();
+  }
+
   public recordWebhook(record: WebhookRecord): boolean {
     const exists = this.memoryDb.webhooks.some(w => w.eventId === record.eventId);
     if (exists) return false;

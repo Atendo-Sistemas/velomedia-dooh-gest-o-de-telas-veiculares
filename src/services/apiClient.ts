@@ -11,6 +11,24 @@ import type {
   PublicPlayerBootstrap,
 } from '../types';
 
+export interface SystemSettingsView {
+  pixGatewayProvider: '' | 'asaas';
+  asaasEnvironment: 'sandbox' | 'production';
+  mapboxAccessToken: string;
+  asaasApiKeyConfigured: boolean;
+  asaasApiKeyMasked: string;
+  asaasWebhookTokenConfigured: boolean;
+  asaasWebhookTokenMasked: string;
+}
+
+export type SystemSettingsPatch = Partial<{
+  pixGatewayProvider: '' | 'asaas';
+  asaasEnvironment: 'sandbox' | 'production';
+  asaasApiKey: string;
+  asaasWebhookToken: string;
+  mapboxAccessToken: string;
+}>;
+
 const API_BASE = '/api/v1';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -54,6 +72,17 @@ export const apiClient = {
   },
   async getPublicPlayer(deviceCode: string): Promise<PublicPlayerBootstrap> {
     return request<PublicPlayerBootstrap>(`/player/${encodeURIComponent(deviceCode)}`);
+  },
+
+  // System settings (integrations)
+  async getSettings(): Promise<SystemSettingsView> {
+    return request<SystemSettingsView>('/settings');
+  },
+  async updateSettings(patch: SystemSettingsPatch): Promise<SystemSettingsView> {
+    return request<SystemSettingsView>('/settings', { method: 'PUT', body: JSON.stringify(patch) });
+  },
+  async getPublicSettings(): Promise<{ mapboxAccessToken: string }> {
+    return request('/settings/public');
   },
 
   // Organizations

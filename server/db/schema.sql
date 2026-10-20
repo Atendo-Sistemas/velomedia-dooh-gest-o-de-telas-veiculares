@@ -1,5 +1,5 @@
 -- VeloMedia DOOH Production PostgreSQL Relational Database Schema
--- Versão: 2.5.0-beta.4
+-- Versão: 2.5.0-beta.5
 -- Multi-tenant isolation with strict foreign keys, indexes, and audit trails
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

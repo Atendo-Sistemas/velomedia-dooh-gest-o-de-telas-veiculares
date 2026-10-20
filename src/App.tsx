@@ -21,6 +21,7 @@ import { AdvertiserPortal } from './components/AdvertiserPortal';
 import { PassengerPortal } from './components/PassengerPortal';
 import { RegistrationCenter } from './components/RegistrationCenter';
 import { LoginPage } from './components/LoginPage';
+import { SettingsPanel } from './components/SettingsPanel';
 import { Campaign, Device, Driver, GeoFence, ProofOfPlayLog, SaaSOrganization, SaaSUser, AdvertiserAccount, PublicPlayerCampaign, PublicPlayerDevice } from './types';
 import { 
   INITIAL_CAMPAIGNS, 
@@ -854,6 +855,10 @@ export default function App() {
                 onSwitchOrg={handleSwitchOrg}
                 organizations={organizations}
               />
+            )}
+
+            {activeTab === 'settings' && (authenticatedUser?.role === 'platform_admin' || authenticatedUser?.role === 'super_admin') && (
+              <SettingsPanel />
             )}
 
             {activeTab === 'architecture' && (
