@@ -50,6 +50,7 @@ import {
   geocodeCityOnline 
 } from '../data/geographicPoles';
 import { DriverWorkAreaModal } from './DriverWorkAreaModal';
+import { apiClient } from '../services/apiClient';
 
 interface MapboxGeoManagerProps {
   geoFences: GeoFence[];
@@ -116,6 +117,11 @@ export const MapboxGeoManager: React.FC<MapboxGeoManagerProps> = ({
   const [mapboxToken, setMapboxToken] = useState<string>(
     localStorage.getItem('velomedia_mapbox_token') || 'pk.eyJ1IjoiZG9vaC1tYXBib3giLCJhIjoiY2x2NGhpYnN6MHNxdTJrbzlyYmN2N3N4dyJ9.demo_token'
   );
+  useEffect(() => {
+    apiClient.getPublicSettings()
+      .then(({ mapboxAccessToken }) => { if (mapboxAccessToken) setMapboxToken(mapboxAccessToken); })
+      .catch(() => {});
+  }, []);
   const [showTokenSettings, setShowTokenSettings] = useState<boolean>(false);
   const [isCreatingFence, setIsCreatingFence] = useState<boolean>(false);
 

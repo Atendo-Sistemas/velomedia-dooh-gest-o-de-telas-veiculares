@@ -394,6 +394,30 @@ export class PostgresRepository implements VeloRepository {
     await this.pool.query('DELETE FROM anti_replay_nonces WHERE created_at < NOW() - INTERVAL \'30 minutes\'');
     return { valid: true };
   }
+  async getSystemSettings() {
+    const result = await this.pool.query<{ key: string; value: string }>('SELECT key,value FROM system_settings');
+    return Object.fromEntries(result.rows.map(row => [row.key, row.value]));
+  }
+  async saveSystemSettings(settings: Record<string, string>) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM system_settings WHERE key <> ALL($1::text[])', [Object.keys(settings)]);
+      for (const [key, value] of Object.entries(settings)) {
+        await client.query(
+          'INSERT INTO system_settings(key,value,updated_at) VALUES($1,$2,NOW()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+          [key, value],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async recordWebhook(record: WebhookRecord) {
     const eventId = record.eventId.length <= 64
       ? record.eventId

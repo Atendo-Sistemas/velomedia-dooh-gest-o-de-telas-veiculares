@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
-import { verifyWebhookSignature, getRequiredSecret } from './crypto';
+import { verifyWebhookSignature } from './crypto';
+import { getResolvedSettings, ensureWebhookSecret } from './settings';
+import type { ResolvedSettings } from './settings';
 import { getVeloRepository } from './repository';
 
 export type InvoicePaymentStatus = 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded';
@@ -27,24 +29,36 @@ export class VeloPixGatewayAdapter {
   private repository = getVeloRepository();
 
   constructor() {
-    const provider = (process.env.PIX_GATEWAY_PROVIDER as PaymentGatewayConfig['provider']) || 'efi_bank';
-    const apiKey = process.env.ASAAS_API_KEY?.trim();
-    const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN?.trim();
-    const environment = process.env.ASAAS_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production';
+    this.config = VeloPixGatewayAdapter.buildConfig({
+      pixGatewayProvider: process.env.PIX_GATEWAY_PROVIDER,
+      asaasApiKey: process.env.ASAAS_API_KEY?.trim(),
+      asaasWebhookToken: process.env.ASAAS_WEBHOOK_TOKEN?.trim(),
+      asaasEnvironment: process.env.ASAAS_ENVIRONMENT,
+      webhookSecret: process.env.WEBHOOK_SECRET,
+    });
+  }
 
-    const isConfigured = provider === 'asaas' && Boolean(apiKey && webhookToken);
-
-    this.config = {
+  private static buildConfig(s: Partial<ResolvedSettings>): PaymentGatewayConfig {
+    const provider = (s.pixGatewayProvider as PaymentGatewayConfig['provider']) || 'efi_bank';
+    const apiKey = s.asaasApiKey;
+    const webhookToken = s.asaasWebhookToken;
+    return {
       provider,
       apiKey,
       webhookToken,
-      environment,
-      webhookSecret: process.env.WEBHOOK_SECRET,
-      isConfigured,
+      environment: s.asaasEnvironment === 'sandbox' ? 'sandbox' : 'production',
+      webhookSecret: s.webhookSecret,
+      isConfigured: provider === 'asaas' && Boolean(apiKey && webhookToken),
     };
   }
 
-  public isProviderConfigured(): boolean {
+  /** Recarrega as credenciais salvas no painel de configuração (com fallback para o ambiente). */
+  private async refreshConfig(): Promise<void> {
+    this.config = VeloPixGatewayAdapter.buildConfig(await getResolvedSettings());
+  }
+
+  public async isProviderConfigured(): Promise<boolean> {
+    await this.refreshConfig();
     return this.config.isConfigured;
   }
 
@@ -120,10 +134,11 @@ export class VeloPixGatewayAdapter {
     email: string;
     phone: string;
   }): Promise<PixChargeResult> {
+    await this.refreshConfig();
     if (!this.config.isConfigured) {
       return {
         status: 'payment_provider_not_configured',
-        error: 'Configure PIX_GATEWAY_PROVIDER=asaas, ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN.',
+        error: 'Configure o provedor Asaas, a chave de API e o token de webhook em Configurações > Integrações.',
       };
     }
 
@@ -183,7 +198,8 @@ export class VeloPixGatewayAdapter {
     }
   }
 
-  public verifyAsaasWebhookToken(token: string | undefined): boolean {
+  public async verifyAsaasWebhookToken(token: string | undefined): Promise<boolean> {
+    await this.refreshConfig();
     const expected = this.config.webhookToken;
     if (!expected || !token) return false;
     const supplied = Buffer.from(token);
@@ -200,11 +216,8 @@ export class VeloPixGatewayAdapter {
     reason?: string; 
     event?: any 
   }> {
-    const webhookSecret = this.config.webhookSecret || (
-      process.env.NODE_ENV === 'production' 
-        ? getRequiredSecret('WEBHOOK_SECRET')
-        : 'velo-webhook-dev-secret-2026'
-    );
+    await this.refreshConfig();
+    const webhookSecret = this.config.webhookSecret || await ensureWebhookSecret();
 
     const isValid = verifyWebhookSignature(rawBody, signature, webhookSecret);
     if (!isValid) {

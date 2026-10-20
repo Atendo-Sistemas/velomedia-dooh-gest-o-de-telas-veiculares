@@ -32,7 +32,7 @@ O player público por QR Code carrega dados de campanhas próprios para exibiç�
    chmod 600 .env
    ```
 
-2. Configure `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (com pelo menos 16 caracteres), `WEBHOOK_SECRET` (`openssl rand -hex 32`), `POSTGRES_PASSWORD` e `POSTGRES_APP_PASSWORD` (gere cada uma com `openssl rand -hex 24`) e defina `CORS_ALLOWED_ORIGINS` com a origem HTTPS. O Compose inicializa um usuário administrador do banco e um usuário separado para a aplicação; este último recebe somente as permissões de banco/esquema necessárias às migrações de inicialização. Use credenciais hexadecimais seguras para URLs no formato usado pelo Compose. Defina `APP_HOST_PORT` como uma porta local livre (padrão `3300`); não a exponha publicamente.
+2. Configure `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` (com pelo menos 16 caracteres), `POSTGRES_PASSWORD` e `POSTGRES_APP_PASSWORD` (gere cada uma com `openssl rand -hex 24`) e defina `CORS_ALLOWED_ORIGINS` com a origem HTTPS. O Compose inicializa um usuário administrador do banco e um usuário separado para a aplicação; este último recebe somente as permissões de banco/esquema necessárias às migrações de inicialização. Use credenciais hexadecimais seguras para URLs no formato usado pelo Compose. Defina `APP_HOST_PORT` como uma porta local livre (padrão `3300`); não a exponha publicamente.
 
 3. Inicie e verifique:
 
@@ -50,7 +50,7 @@ O player público por QR Code carrega dados de campanhas próprios para exibiç�
 
 ### Cobranças PIX pelo Asaas
 
-Selecione `PIX_GATEWAY_PROVIDER=asaas`, defina `ASAAS_API_KEY` e configure `ASAAS_ENVIRONMENT` como `sandbox` para testes ou `production` para cobranças reais. Defina `ASAAS_WEBHOOK_TOKEN` como um valor aleatório exclusivo de 32 a 255 caracteres (sem espaços) e cadastre `https://<seu-dominio>/api/v1/webhooks/asaas` no painel Asaas usando o mesmo token. Inscreva-se nos eventos `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED` e `PAYMENT_OVERDUE`; o Asaas envia o token configurado no cabeçalho `asaas-access-token`.
+Tokens e APIs não são necessários na instalação: após o primeiro login como administrador, abra **Configurações** no menu e preencha o provedor Asaas, o ambiente (`sandbox` para testes ou `production`), a chave de API, o token do Mapbox e o token do webhook (o segredo HMAC de webhooks é gerado automaticamente). As variáveis `PIX_GATEWAY_PROVIDER`, `ASAAS_*` e `MAPBOX_ACCESS_TOKEN` continuam aceitas como alternativa opcional. O token do webhook deve ser um valor aleatório exclusivo de 32 a 255 caracteres (sem espaços) e cadastre `https://<seu-dominio>/api/v1/webhooks/asaas` no painel Asaas usando o mesmo token. Inscreva-se nos eventos `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED` e `PAYMENT_OVERDUE`; o Asaas envia o token configurado no cabeçalho `asaas-access-token`.
 
 O endpoint de PIX de faturas cria ou reutiliza um cliente Asaas com base no CNPJ da organização e no contato de cobrança, cria ou reutiliza um pagamento PIX usando a fatura como referência externa e retorna o código copia e cola e a imagem do QR Code. O webhook confirma somente pagamentos cujo ID no provedor, referência da fatura e valor correspondam a uma fatura registrada localmente. Teste com credenciais sandbox do Asaas antes de habilitar a produção. Nunca registre chaves de API ou tokens de webhook no repositório.
 
@@ -74,7 +74,7 @@ O importador rejeita tabelas de repositório, sessão ou segurança que não est
 
 ### systemd com servidor PostgreSQL gerenciado separadamente
 
-Instale Node.js 22+, PostgreSQL, Caddy e um usuário de serviço `velomedia` sem permissão de login. Instale as dependências e gere a compilação (`npm ci && npm run build`). Peça ao administrador do banco para instalar previamente `uuid-ossp` e `pgcrypto` e, em seguida, conceder ao usuário da aplicação as permissões de conexão ao banco e de uso/criação do esquema necessárias às migrações versionadas de inicialização. Copie `.env.example` para `/etc/velomedia/velomedia.env`, defina `DATABASE_URL` com a URL de conexão do PostgreSQL e configure o administrador inicial, o segredo de webhook e a origem HTTPS do CORS; depois, restrinja o acesso ao arquivo ao root e ao grupo do serviço (`0640`). Defina `PGSSL=true` quando o provedor do banco exigir TLS. Instale `deploy/velomedia.service` e `deploy/Caddyfile`, configure o nome de domínio real e inicie com:
+Instale Node.js 22+, PostgreSQL, Caddy e um usuário de serviço `velomedia` sem permissão de login. Instale as dependências e gere a compilação (`npm ci && npm run build`). Peça ao administrador do banco para instalar previamente `uuid-ossp` e `pgcrypto` e, em seguida, conceder ao usuário da aplicação as permissões de conexão ao banco e de uso/criação do esquema necessárias às migrações versionadas de inicialização. Copie `.env.example` para `/etc/velomedia/velomedia.env`, defina `DATABASE_URL` com a URL de conexão do PostgreSQL e configure o administrador inicial e a origem HTTPS do CORS; depois, restrinja o acesso ao arquivo ao root e ao grupo do serviço (`0640`). Defina `PGSSL=true` quando o provedor do banco exigir TLS. Instale `deploy/velomedia.service` e `deploy/Caddyfile`, configure o nome de domínio real e inicie com:
 
 ```sh
 sudo systemctl daemon-reload

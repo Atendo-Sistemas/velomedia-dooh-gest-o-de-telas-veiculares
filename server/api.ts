@@ -42,6 +42,8 @@ import {
   validateBody
 } from './schemas';
 import { pixGateway } from './billing';
+import { getSettingsView, updateSettings, getResolvedSettings } from './settings';
+import { z } from 'zod';
 import {
   adminRequestRateLimiter,
   asaasWebhookRateLimiter,
@@ -80,7 +82,7 @@ apiRouter.get('/health', async (_req: Request, res: Response) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '2.5.0-beta.4',
+    version: '2.5.0-beta.5',
     environment: process.env.NODE_ENV || 'production',
   });
 });
@@ -406,7 +408,7 @@ apiRouter.post('/devices/pair', validateBody(DevicePairingRequestSchema), async 
       currentFps: 60,
       brightness: 80,
       volume: 50,
-      appVersion: '2.5.0-beta.4',
+      appVersion: '2.5.0-beta.5',
       lastHeartbeat: new Date().toISOString(),
       kioskLocked: true,
       screenUptimeTodayHours: 0,
@@ -878,10 +880,34 @@ apiRouter.post('/invoices/:id/charge-pix', requireAuth, requireRole(['platform_a
 });
 
 /**
+ * Painel de configuração de integrações (APIs e tokens), preenchido após a instalação.
+ */
+const SettingsSchema = z.object({
+  pixGatewayProvider: z.enum(['', 'asaas']).optional(),
+  asaasEnvironment: z.enum(['sandbox', 'production']).optional(),
+  asaasApiKey: z.string().max(512).optional(),
+  asaasWebhookToken: z.string().max(255).refine(v => v === '' || (v.length >= 32 && !/\s/.test(v)), 'O token de webhook deve ter de 32 a 255 caracteres, sem espaços.').optional(),
+  mapboxAccessToken: z.string().max(512).optional(),
+}).strict();
+
+apiRouter.get('/settings/public', requireAuth, async (_req: Request, res: Response) => {
+  res.json({ mapboxAccessToken: (await getResolvedSettings()).mapboxAccessToken || '' });
+});
+
+apiRouter.get('/settings', requireAuth, requireRole(['platform_admin', 'super_admin']), async (_req: Request, res: Response) => {
+  res.json(await getSettingsView());
+});
+
+apiRouter.put('/settings', requireAuth, requireRole(['platform_admin', 'super_admin']), adminRequestRateLimiter, validateBody(SettingsSchema), async (req: Request, res: Response) => {
+  await updateSettings(req.body);
+  res.json(await getSettingsView());
+});
+
+/**
  * Asaas webhook authenticated with the dedicated notification token.
  */
 apiRouter.post('/webhooks/asaas', asaasWebhookRateLimiter, async (req: Request, res: Response) => {
-  if (!pixGateway.verifyAsaasWebhookToken(req.get('asaas-access-token'))) {
+  if (!await pixGateway.verifyAsaasWebhookToken(req.get('asaas-access-token'))) {
     return res.status(401).json({ error: 'invalid_webhook_token' });
   }
   const event = req.body;

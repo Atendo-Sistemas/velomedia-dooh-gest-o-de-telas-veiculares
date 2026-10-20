@@ -126,12 +126,12 @@ describe('Asaas PIX gateway', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('rejects webhook tokens that do not match the configured Asaas token', () => {
+  it('rejects webhook tokens that do not match the configured Asaas token', async () => {
     configureAsaas();
     const gateway = new VeloPixGatewayAdapter();
-    expect(gateway.verifyAsaasWebhookToken('a'.repeat(48))).toBe(true);
-    expect(gateway.verifyAsaasWebhookToken('wrong')).toBe(false);
-    expect(gateway.verifyAsaasWebhookToken(undefined)).toBe(false);
+    expect(await gateway.verifyAsaasWebhookToken('a'.repeat(48))).toBe(true);
+    expect(await gateway.verifyAsaasWebhookToken('wrong')).toBe(false);
+    expect(await gateway.verifyAsaasWebhookToken(undefined)).toBe(false);
   });
 
   it('does not return provider response details when Asaas fails', async () => {

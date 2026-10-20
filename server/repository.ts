@@ -94,6 +94,10 @@ export interface VeloRepository {
   // Webhooks
   recordWebhook(record: WebhookRecord): Promise<boolean>;
 
+  // System settings (integrations configured after installation)
+  getSystemSettings(): Promise<Record<string, string>>;
+  saveSystemSettings(settings: Record<string, string>): Promise<void>;
+
   // Pairing Tokens
   createPairingToken(token: PairingTokenRecord): Promise<void>;
   getPairingToken(token: string): Promise<PairingTokenRecord | undefined>;
@@ -278,6 +282,13 @@ export class JsonDevelopmentRepository implements VeloRepository {
 
   async checkAndRecordReplay(eventId: string, nonce: string, timestampMs: number): Promise<{ valid: boolean; reason?: string }> {
     return storage.checkAndRecordReplay(eventId, nonce, timestampMs);
+  }
+
+  async getSystemSettings(): Promise<Record<string, string>> {
+    return storage.getSystemSettings();
+  }
+  async saveSystemSettings(settings: Record<string, string>): Promise<void> {
+    storage.saveSystemSettings(settings);
   }
 
   async recordWebhook(record: WebhookRecord): Promise<boolean> {

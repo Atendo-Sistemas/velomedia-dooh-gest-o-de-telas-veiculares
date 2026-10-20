@@ -39,7 +39,6 @@ describe('production environment validation', () => {
 
     expect(result.valid).toBe(false);
     expect(result.missing).toEqual([
-      'WEBHOOK_SECRET',
       'CORS_ALLOWED_ORIGINS',
       'DATABASE_URL',
       'INITIAL_ADMIN_EMAIL',
@@ -72,34 +71,14 @@ describe('production environment validation', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('requires valid Asaas credentials and webhook token when Asaas is selected', () => {
-    const missing = validateEnvironment({
-      ...validProductionEnv,
-      PIX_GATEWAY_PROVIDER: 'asaas',
-    });
-    expect(missing.missing).toEqual(['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN']);
-
-    const configured = validateEnvironment({
-      ...validProductionEnv,
-      PIX_GATEWAY_PROVIDER: 'asaas',
-      ASAAS_ENVIRONMENT: 'sandbox',
-      ASAAS_API_KEY: 'test-api-key',
-      ASAAS_WEBHOOK_TOKEN: 'a'.repeat(48),
-    });
-    expect(configured.valid).toBe(true);
+  it('does not require tokens or API keys at install time', () => {
+    const result = validateEnvironment({ ...validProductionEnv, PIX_GATEWAY_PROVIDER: 'asaas' });
+    expect(result.valid).toBe(true);
   });
 
-  it('rejects an invalid Asaas environment and webhook token', () => {
-    const result = validateEnvironment({
-      ...validProductionEnv,
-      PIX_GATEWAY_PROVIDER: 'asaas',
-      ASAAS_ENVIRONMENT: 'test',
-      ASAAS_API_KEY: 'test-api-key',
-      ASAAS_WEBHOOK_TOKEN: 'short token',
-    });
-    expect(result.valid).toBe(false);
+  it('still rejects an invalid Asaas environment value', () => {
+    const result = validateEnvironment({ ...validProductionEnv, ASAAS_ENVIRONMENT: 'test' });
     expect(result.errors).toContain('ASAAS_ENVIRONMENT deve ser sandbox ou production.');
-    expect(result.errors).toContain('ASAAS_WEBHOOK_TOKEN deve ter entre 32 e 255 caracteres e não conter espaços.');
   });
 });
 
