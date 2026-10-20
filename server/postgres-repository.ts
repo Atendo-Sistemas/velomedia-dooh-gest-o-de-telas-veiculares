@@ -64,12 +64,17 @@ export class PostgresRepository implements VeloRepository {
         const { rowCount } = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [name]);
         if (rowCount) continue;
         const sql = await readFile(join(migrationsDir, name), 'utf8');
-        await client.query(sql);
+        try {
+          await client.query(sql);
+        } catch (error) {
+          const pgError = error as { message?: string; code?: string };
+          throw new Error(`Falha na migration ${name} (SQLSTATE ${pgError.code ?? 'desconhecido'}): ${pgError.message ?? 'erro desconhecido'}`, { cause: error });
+        }
         await client.query('INSERT INTO schema_migrations(version) VALUES ($1)', [name]);
       }
       await client.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally {
       client.release();
@@ -140,7 +145,7 @@ export class PostgresRepository implements VeloRepository {
       }
       await client.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally {
       client.release();

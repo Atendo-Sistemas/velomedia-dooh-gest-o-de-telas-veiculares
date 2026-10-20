@@ -118,3 +118,27 @@ describe('API write schemas', () => {
     }).success).toBe(false);
   });
 });
+
+describe('payment configuration in production', () => {
+  it('boots with payments disabled and without Asaas credentials', () => {
+    expect(validateEnvironment({ ...validProductionEnv, PIX_GATEWAY_PROVIDER: 'disabled' }).valid).toBe(true);
+    expect(validateEnvironment(validProductionEnv).valid).toBe(true);
+  });
+
+  it('requires Asaas credentials only when asaas is selected', () => {
+    const result = validateEnvironment({ ...validProductionEnv, PIX_GATEWAY_PROVIDER: 'asaas' });
+    expect(result.valid).toBe(false);
+    expect(result.missing).toEqual(['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN']);
+    expect(validateEnvironment({
+      ...validProductionEnv, PIX_GATEWAY_PROVIDER: 'asaas', ASAAS_ENVIRONMENT: 'sandbox',
+      ASAAS_API_KEY: 'fake-key', ASAAS_WEBHOOK_TOKEN: 'w'.repeat(32),
+    }).valid).toBe(true);
+  });
+
+  it('rejects mock_dev, unknown providers and simulation in production', () => {
+    for (const provider of ['mock_dev', 'efi_bank', 'bogus']) {
+      expect(validateEnvironment({ ...validProductionEnv, PIX_GATEWAY_PROVIDER: provider }).valid).toBe(false);
+    }
+    expect(validateEnvironment({ ...validProductionEnv, SIMULATION_ENABLED: 'true' }).valid).toBe(false);
+  });
+});

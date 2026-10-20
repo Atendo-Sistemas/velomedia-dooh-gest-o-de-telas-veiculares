@@ -14,7 +14,7 @@ export interface PixChargeResult {
 }
 
 export interface PaymentGatewayConfig {
-  provider: 'efi_bank' | 'mercadopago' | 'asaas' | 'mock_dev';
+  provider: 'efi_bank' | 'mercadopago' | 'asaas' | 'mock_dev' | 'disabled';
   apiKey?: string;
   webhookToken?: string;
   environment: 'sandbox' | 'production';
@@ -27,7 +27,7 @@ export class VeloPixGatewayAdapter {
   private repository = getVeloRepository();
 
   constructor() {
-    const provider = (process.env.PIX_GATEWAY_PROVIDER as PaymentGatewayConfig['provider']) || 'efi_bank';
+    const provider = (process.env.PIX_GATEWAY_PROVIDER as PaymentGatewayConfig['provider']) || 'disabled';
     const apiKey = process.env.ASAAS_API_KEY?.trim();
     const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN?.trim();
     const environment = process.env.ASAAS_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production';
@@ -123,7 +123,9 @@ export class VeloPixGatewayAdapter {
     if (!this.config.isConfigured) {
       return {
         status: 'payment_provider_not_configured',
-        error: 'Configure PIX_GATEWAY_PROVIDER=asaas, ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN.',
+        error: this.config.provider === 'disabled'
+          ? 'Pagamentos desabilitados (modo de demonstração). Nenhuma cobrança foi gerada.'
+          : 'Configure PIX_GATEWAY_PROVIDER=asaas, ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN.',
       };
     }
 

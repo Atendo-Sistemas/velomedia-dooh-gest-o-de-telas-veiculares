@@ -88,6 +88,45 @@ As credenciais de `DATABASE_URL` devem estar codificadas para URL. Permita acess
 
 Faça backups do PostgreSQL regularmente e teste a restauração. Antes de atualizar, faça backup do banco, pare a aplicação, atualize o código, execute `npm ci` e `npm run build`, depois inicie a aplicação e verifique os logs. As migrações são transacionais e executadas na inicialização. Teste a restauração de backups separadamente das atualizações de rotina.
 
+### Modo de demonstração (sem pagamentos)
+
+Com `PIX_GATEWAY_PROVIDER="disabled"` (padrão do `.env.example`) a aplicação inicia sem nenhuma credencial de pagamento. Todos os recursos não financeiros funcionam; a geração de PIX retorna `503 payment_provider_not_configured`, nenhuma cobrança real é criada e **nenhum pagamento é confirmado**. Em produção, `mock_dev`, `efi_bank`, `mercadopago` e `SIMULATION_ENABLED=true` são rejeitados na inicialização.
+
+### Asaas Sandbox
+
+Defina `PIX_GATEWAY_PROVIDER="asaas"`, `ASAAS_ENVIRONMENT="sandbox"`, `ASAAS_API_KEY` (chave do sandbox, apenas no `.env`/secret do servidor) e `ASAAS_WEBHOOK_TOKEN` (`openssl rand -hex 32`). Cadastre o webhook `https://SEU_DOMINIO/api/v1/webhooks/asaas` com o mesmo token. Sem as duas variáveis, a inicialização em produção falha com mensagem explicativa (use `disabled` para demonstração).
+
+### Geração de segredos e PostgreSQL
+
+```sh
+openssl rand -hex 32      # WEBHOOK_SECRET, ASAAS_WEBHOOK_TOKEN
+openssl rand -base64 24   # POSTGRES_PASSWORD, POSTGRES_APP_PASSWORD, INITIAL_ADMIN_PASSWORD (mín. 16 caracteres)
+```
+
+O PostgreSQL 17 do Compose não publica portas; só a aplicação o acessa pela rede interna. Nunca versione o `.env`.
+
+### Migrações
+
+Executadas automaticamente na inicialização, em uma única transação com advisory lock: `schema.sql` (versão-base `000_initial_schema.sql`) e depois `server/db/migrations/*.sql` em ordem, uma vez por versão. Se uma falhar, tudo é revertido (o erro informa o nome da migration e o SQLSTATE, sem segredos) e a próxima inicialização tenta novamente. A migration `002_repair_repository_indexes.sql` repara bancos que tenham registrado a `001` com uma versão antiga. Nenhum dado, volume ou histórico é apagado. O health check `/api/health` só responde 200 quando o banco está acessível, e a aplicação só começa a escutar após inicializar o banco.
+
+### Testes
+
+`npm test` e `npm run lint`. Os testes de integração exigem um PostgreSQL com banco cujo nome contenha `test`:
+
+```sh
+VELOMEDIA_TEST_DATABASE_URL=postgresql://usuario@localhost:5432/velomedia_test npm test
+VELOMEDIA_TEST_DOCKER=true npm test -- tests/docker-image.test.ts   # build da imagem
+```
+
+### Deploy Docker Swarm, health check e rollback
+
+```sh
+docker build -t velomedia:TAG .
+SERVICE=velomedia_app IMAGE=velomedia:TAG ./deploy/swarm-deploy.sh
+```
+
+O script atualiza apenas o serviço indicado (`start-first`), aguarda a tarefa ficar saudável (health check `/api/health`), e em falha o Swarm faz rollback automático e o script sai com erro. Volumes não são alterados. Rollback manual: `docker service rollback velomedia_app`. Diagnóstico: `docker service ps --no-trunc velomedia_app` e `docker service logs velomedia_app`. Faça backup do banco (`pg_dump`) antes de atualizar.
+
 ## Commands
 
 - `npm run dev` — inicia o servidor de desenvolvimento com Vite.

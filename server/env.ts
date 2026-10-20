@@ -34,11 +34,18 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): EnvVa
       errors.push('BYPASS_ENV_CHECK é proibido em ambiente de produção.');
     }
 
-    if (env.PIX_GATEWAY_PROVIDER === 'asaas') {
+    const provider = (env.PIX_GATEWAY_PROVIDER?.trim() || 'disabled');
+    if (!['disabled', 'asaas'].includes(provider)) {
+      errors.push(`PIX_GATEWAY_PROVIDER '${provider}' não é permitido em produção. Use disabled (demonstração sem pagamentos) ou asaas.`);
+    }
+    if (env.SIMULATION_ENABLED === 'true') {
+      errors.push('SIMULATION_ENABLED é proibido em ambiente de produção.');
+    }
+    if (provider === 'asaas') {
       for (const name of ['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN']) {
         if (!env[name]?.trim()) {
           missing.push(name);
-          errors.push(`Variável obrigatória para Asaas '${name}' ausente ou vazia.`);
+          errors.push(`Variável obrigatória para Asaas '${name}' ausente ou vazia. Para demonstração sem pagamentos, use PIX_GATEWAY_PROVIDER=disabled.`);
         }
       }
       if (env.ASAAS_ENVIRONMENT && !['sandbox', 'production'].includes(env.ASAAS_ENVIRONMENT)) {
